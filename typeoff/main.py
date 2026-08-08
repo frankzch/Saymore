@@ -366,6 +366,15 @@ def main():
         """整句命令在听写/提醒两种模式下都生效：命中即执行并返回 True，否则 False。"""
         if cmd in send_words:
             state["nod_until"] = time.time() + 0.9  # 执行命令：猫点头致意
+            # 前置探测：前台窗口若找不到输入框（焦点在任务栏/桌面等），提示用户重定位，
+            # 不动面板缓存——避免把文字粘到"无关焦点"造成静默丢失。
+            if not focus_window(focus_title, focus_input):
+                if not reminder.nagging:
+                    threading.Thread(target=tts.speak,
+                                     args=("没找到输入框，请先将鼠标光标放置到输入框里，再说发送指令。",),
+                                     daemon=True).start()
+                print("[info] 前台窗口未找到输入框，未发送；面板缓存保留，请点入输入框后重说「发送」")
+                return True
             sent = True
             if state.get("panel") is not None:
                 sent = state["panel"].flush_all()  # 先把面板里攒的话整理回填，再回车

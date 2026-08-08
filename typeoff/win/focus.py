@@ -267,14 +267,17 @@ def _focus_any_input_uia(hwnd):
 
 
 def focus_window(target, input_name=""):
-    """把焦点定位到当前前台窗口的输入框（不再切换/激活窗口——你在哪个窗口就用哪个，
+    """把焦点定位到当前前台窗口的输入框（不切换/激活窗口——你在哪个窗口就用哪个，
     便于在 DeepSeek 等网页里用语音）。前台是配置的目标窗口(如 Claude)且给了 input_name 时，
-    用 UIA 精确定位该控件(Prompt)；否则自动找输入框聚焦。"""
+    用 UIA 精确定位该控件(Prompt)；否则自动找输入框聚焦。
+
+    返回是否真的聚焦到了一个输入框：调用方（如"发送"命令）据此决定是否粘贴/回车，
+    没找到时应提示用户先点进输入框，避免把文字扔到无关焦点（任务栏/桌面）。"""
     _setup_focus_api()
     u = ctypes.windll.user32
     fg = u.GetForegroundWindow()
     if not fg:
-        return
+        return False
     is_target = False
     if target:
         buf = ctypes.create_unicode_buffer(512)
@@ -282,10 +285,10 @@ def focus_window(target, input_name=""):
         tl = target.lower()
         is_target = tl in buf.value.lower() or tl in _proc_name(fg).lower()
     if is_target and input_name:
-        if not _focus_input_uia(fg, input_name):
-            _focus_any_input_uia(fg)  # Prompt 没找到时退回通用查找
-    else:
-        _focus_any_input_uia(fg)
+        if _focus_input_uia(fg, input_name):
+            return True
+        return _focus_any_input_uia(fg)  # Prompt 没找到时退回通用查找
+    return _focus_any_input_uia(fg)
 
 
 def output_text(text, paste, focus_title=None, focus_input=""):
