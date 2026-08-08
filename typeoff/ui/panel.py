@@ -107,6 +107,8 @@ class GlassWindow:
         self._status_text = ""  # 底部状态栏文字（正在说话/整理中/倒计时）
         self._status_color = 0  # 底部状态栏文字色 COLORREF
         self._status_h = 0      # 底部状态栏高度（有状态文字时=一行高，无则=0）
+        self._warn_text = ""    # 警告行文字（如"没找到输入框"），红色，画在状态栏下面独占一行
+        self._warn_h = 0        # 警告行高度（有 warn 文字时=一行高，无则=0）
         self._floor_h = 0       # 防抖：update 期间窗口高度只增不减，正文变短时才重置
         self._prev_body_len = 0 # 上次正文字数，用于检测 undo/clear 导致的正文缩短
         self._anchor = (0, 0)  # 最近一次 update() 的 (right_x, bottom_y)，供进入编辑态时原地长高用
@@ -425,6 +427,8 @@ class GlassWindow:
                 self._paint_hint(hdc)
             if self._status_text and not self.editing:
                 self._paint_status(hdc)
+            if self._warn_text and not self.editing:
+                self._paint_warn(hdc)
             self._paint_thumb(hdc)
         self.u.EndPaint(hwnd, ctypes.byref(ps))
 
@@ -437,18 +441,27 @@ class GlassWindow:
         self.u.DrawTextW(hdc, _EDIT_HINT_TEXT, -1, ctypes.byref(r), 0x25)  # DT_CENTER|DT_VCENTER|DT_SINGLELINE
 
     def _paint_status(self, hdc):
-        """底部状态栏：正在说话/整理中/倒计时等状态文字，固定在面板最底部一行。"""
+        """底部状态栏：正在说话/整理中/倒计时等状态文字。有 warn 时状态栏在 warn 上方，否则贴底。"""
         self.g.SelectObject(hdc, self.font)
         self.g.SetTextColor(hdc, self._status_color)
         self.g.SetBkMode(hdc, 1)  # TRANSPARENT
-        r = _RECT(self.pad, self.h - self.pad - self._status_h, self.w - self.pad, self.h - self.pad)
+        bottom = self.h - self.pad - self._warn_h
+        r = _RECT(self.pad, bottom - self._status_h, self.w - self.pad, bottom)
         self.u.DrawTextW(hdc, self._status_text, -1, ctypes.byref(r), 0x24)  # DT_VCENTER|DT_SINGLELINE（靠左）
+
+    def _paint_warn(self, hdc):
+        """警告行：紧贴面板最底部一行，红色（复用 low_conf_color，同"红=需注意"语义）。"""
+        self.g.SelectObject(hdc, self.font)
+        self.g.SetTextColor(hdc, self.low_conf_color)
+        self.g.SetBkMode(hdc, 1)  # TRANSPARENT
+        r = _RECT(self.pad, self.h - self.pad - self._warn_h, self.w - self.pad, self.h - self.pad)
+        self.u.DrawTextW(hdc, self._warn_text, -1, ctypes.byref(r), 0x24)  # DT_VCENTER|DT_SINGLELINE（靠左）
 
     def _thumb_metrics(self):
         """(滑道高, 总行数, 可见行数, 滑块高)，文字装得下就返回 None。量程只按行数算。
         编辑态顶部多出提示条、底部状态栏，滑道都要让开。"""
         top = self.pad + (self._hint_h if self.editing else 0)
-        bottom = self.pad + self._status_h
+        bottom = self.pad + self._status_h + self._warn_h
         track = self.h - bottom - top
         total = self.u.SendMessageW(self.edit, _EM_GETLINECOUNT, 0, 0)
         visible = max(1, track // self._line_h())
@@ -477,33 +490,37 @@ class GlassWindow:
         self.u.ReleaseDC(None, hdc)
         return size.cy
 
-    def update(self, clean, raw, hint, right_x, bottom_y, low_conf=False, **_kw):
+    def update(self, clean, raw, hint, right_x, bottom_y, low_conf=False, warn="", **_kw):
         """正文（已整理/未整理）塞进 RichEdit，状态提示（正在说话/整理中/倒计时）固定在面板
         最底部一行作为状态栏、由父窗口 _paint() 绘制，不占正文区。
         把窗口右边缘对到 right_x、底边对到 bottom_y，文字多时只往上撑高；撑到 max_h 就不再涨，
         改显示尾部（最新内容）+ 滚动条（滚轮滚动）；全空则隐藏。
-        low_conf=True：整理置信度偏低，clean 段改红色提示用户复核。"""
+        low_conf=True：整理置信度偏低，clean 段改红色提示用户复核。
+        warn：非空则在状态栏下面单开一行红字警告（如"没找到输入框"），提示紧急且不该被状态覆盖。"""
         self._anchor = (right_x, bottom_y)  # 供 _start_edit() 原地长高时用，编辑中也要保持更新
         if self.editing:
             return  # 编辑中：别拿识别结果覆盖用户正在改的字，退出编辑态后自然恢复刷新
-        clean, raw, hint = (clean or "").strip(), (raw or "").strip(), (hint or "").strip()
-        if not clean and not raw and not hint:
+        clean, raw, hint, warn = ((clean or "").strip(), (raw or "").strip(),
+                                    (hint or "").strip(), (warn or "").strip())
+        if not clean and not raw and not hint and not warn:
             if self._cur is not None:
                 self.u.ShowWindow(self.hwnd, 0)
                 self._cur = None
                 self._floor_h = 0
                 self._prev_body_len = 0
             return
-        key = (clean, raw, hint, low_conf)
+        key = (clean, raw, hint, low_conf, warn)
         if key == self._cur:
             return  # 内容没变：别每帧重申置顶——会和圆环窗抢 z 序，重叠处一直抖
 
         line_h = self._line_h()
 
-        # 底部状态栏：有 hint 时占一行高，无则不占
+        # 底部状态栏：有 hint 时占一行高，无则不占；warn 在其下方再一行（红色）
         self._status_text = hint
         self._status_color = self.hint_color
         self._status_h = line_h if hint else 0
+        self._warn_text = warn
+        self._warn_h = line_h if warn else 0
 
         # RichEdit 只放正文（已整理+未整理），不含状态提示
         has_body = bool(clean or raw)
@@ -530,20 +547,20 @@ class GlassWindow:
         if has_body:
             line_cnt = self.u.SendMessageW(self.edit, _EM_GETLINECOUNT, 0, 0)
             text_h = line_cnt * line_h
-            full_h = text_h + self._status_h + self.pad * 2
+            full_h = text_h + self._status_h + self._warn_h + self.pad * 2
             overflow = full_h > self.max_h
-            h = self.max_h if overflow else max(full_h, line_h + self._status_h + self.pad * 2)
-            edit_h = h - self.pad * 2 - self._status_h
+            h = self.max_h if overflow else max(full_h, line_h + self._status_h + self._warn_h + self.pad * 2)
+            edit_h = h - self.pad * 2 - self._status_h - self._warn_h
             self.u.ShowWindow(self.edit, 4)  # SW_SHOWNOACTIVATE
         else:
             # 没有正文、只有状态栏：状态栏当第一行，RichEdit 隐藏
-            h = self._status_h + self.pad * 2
+            h = self._status_h + self._warn_h + self.pad * 2
             edit_h = 0
             self.u.ShowWindow(self.edit, 0)  # SW_HIDE
         # 防抖：窗口高度只增不减，避免状态栏切换时上下跳
         h = max(h, self._floor_h)
         self._floor_h = h
-        edit_h = h - self.pad * 2 - self._status_h
+        edit_h = h - self.pad * 2 - self._status_h - self._warn_h
         self.w, self.h = w, h
         self.u.MoveWindow(self.hwnd, right_x - w, bottom_y - h, w, h, True)
         self.u.MoveWindow(self.edit, self.pad, self.pad, self.content_w, max(edit_h, 0), True)

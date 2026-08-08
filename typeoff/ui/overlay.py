@@ -427,9 +427,18 @@ def run_overlay(state):
             elif pbuf is not None and pbuf.countdown is not None:
                 secs = int(pbuf.countdown) + 1
                 hint = f"{secs}秒后整理"
+        # 警告行（红色，"没找到输入框"等），到期自动消失
+        warn_entry = state.get("warn")
+        warn_text = ""
+        if warn_entry:
+            text, expire = warn_entry
+            if now < expire:
+                warn_text = text
+            else:
+                state["warn"] = None  # 到期一次性清掉，别每帧再判
         # 面板锚点由当前窗口位置实时推出（拖动后跟随）：猫左=窗口左 pos_x，猫底=pos_y+TH+D
         glass.update(clean, raw, hint, pos_x - 2, pos_y + TH + D, low_conf=low_conf,
-                     warm=bool(state.get("warming")))
+                     warn=warn_text, warm=bool(state.get("warming")))
 
     def open_main():
         """拉起主界面（圆环右键菜单、托盘左键/菜单共用）。"""

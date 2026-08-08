@@ -369,12 +369,13 @@ def main():
             # 前置探测：前台窗口若找不到输入框（焦点在任务栏/桌面等），提示用户重定位，
             # 不动面板缓存——避免把文字粘到"无关焦点"造成静默丢失。
             if not focus_window(focus_title, focus_input):
+                warn_msg = "没找到输入框，请先将鼠标光标放置到输入框里，再说发送指令。"
+                state["warn"] = (warn_msg, time.time() + 15)  # 面板红字提示 15 秒后自动消失
                 if not reminder.nagging:
-                    threading.Thread(target=tts.speak,
-                                     args=("没找到输入框，请先将鼠标光标放置到输入框里，再说发送指令。",),
-                                     daemon=True).start()
+                    threading.Thread(target=tts.speak, args=(warn_msg,), daemon=True).start()
                 print("[info] 前台窗口未找到输入框，未发送；面板缓存保留，请点入输入框后重说「发送」")
                 return True
+            state["warn"] = None  # 找到了输入框：清掉上次可能留下的红字警告
             sent = True
             if state.get("panel") is not None:
                 sent = state["panel"].flush_all()  # 先把面板里攒的话整理回填，再回车
