@@ -450,12 +450,13 @@ class GlassWindow:
         self.u.DrawTextW(hdc, self._status_text, -1, ctypes.byref(r), 0x24)  # DT_VCENTER|DT_SINGLELINE（靠左）
 
     def _paint_warn(self, hdc):
-        """警告行：紧贴面板最底部一行，红色（复用 low_conf_color，同"红=需注意"语义）。"""
+        """警告行：贴面板最底部，红色（复用 low_conf_color，同"红=需注意"语义），
+        自动换行——长句（如"没找到输入框…请…再说发送指令"）单行放不下会截断，两行足够容纳。"""
         self.g.SelectObject(hdc, self.font)
         self.g.SetTextColor(hdc, self.low_conf_color)
         self.g.SetBkMode(hdc, 1)  # TRANSPARENT
         r = _RECT(self.pad, self.h - self.pad - self._warn_h, self.w - self.pad, self.h - self.pad)
-        self.u.DrawTextW(hdc, self._warn_text, -1, ctypes.byref(r), 0x24)  # DT_VCENTER|DT_SINGLELINE（靠左）
+        self.u.DrawTextW(hdc, self._warn_text, -1, ctypes.byref(r), 0x10)  # DT_WORDBREAK（左上起排，自动折行）
 
     def _thumb_metrics(self):
         """(滑道高, 总行数, 可见行数, 滑块高)，文字装得下就返回 None。量程只按行数算。
@@ -515,12 +516,15 @@ class GlassWindow:
 
         line_h = self._line_h()
 
-        # 底部状态栏：有 hint 时占一行高，无则不占；warn 在其下方再一行（红色）
+        # 底部状态栏：有 hint 时占一行高，无则不占；warn 在其下方（红色，两行足够容长句）
         self._status_text = hint
         self._status_color = self.hint_color
         self._status_h = line_h if hint else 0
+        prev_warn_h = self._warn_h
         self._warn_text = warn
-        self._warn_h = line_h if warn else 0
+        self._warn_h = line_h * 2 if warn else 0  # 固定两行：默认警告文字（"没找到输入框…"）单行放不下
+        if self._warn_h < prev_warn_h:  # 警告消失：让防抖 floor 一起回落，否则窗口停留在带警告的高度不缩
+            self._floor_h = 0
 
         # RichEdit 只放正文（已整理+未整理），不含状态提示
         has_body = bool(clean or raw)
