@@ -31,7 +31,7 @@ import typeoff.tts as tts
 import typeoff.ui.panel as panel
 import typeoff.ui.style as ui_style
 from typeoff.config import (DEFAULT_CONFIG, SENTENCE_END, JA_KO_RE,
-                             load_config, load_replacements, apply_replacements)
+                             load_config)
 from typeoff.paths import CONFIG_PATH, _resolve
 from typeoff.hotwords.learn import HotWords
 from typeoff.hotwords.screen import ScreenContext, assemble_context, make_llm_extractor
@@ -174,8 +174,6 @@ def main():
             converter = opencc.OpenCC("t2s")
         else:
             print("[warn] 未安装 opencc，无法转简体（pip install opencc）")
-
-    replacements = load_replacements(cfg.get("replacements_file", ""))
 
     # 热词自学习：回填即记文本(发送时若在框里改过再补记一条)，休眠时走本地 llama-server(extract 人格)
     # 切词计频写 hotwords.txt。字数封顶 1500、硬超时 8s（见 hotwords.py），保证单轮 ≤10s。
@@ -519,8 +517,6 @@ def main():
             print("[done] 清空：面板缓存已重置")
             ack_cue()
             return
-        if replacements:
-            text = apply_replacements(text, replacements)
         buffer.add(text)  # 攒进面板缓冲，后台每 interval 秒全窗口整理；只有说"发送"才回填输入框
         # 即时回应一声"嗯/好"，让用户知道这句已听到——不等后台整理（那要好几秒）。
         # 但距上一声不够 hear_cue_min_gap 秒就跳过，免得说话密时反馈过密。

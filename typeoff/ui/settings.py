@@ -47,7 +47,7 @@ HOTWORD_CATEGORIES = [
     ("热词", "作为上下文喂给识别模型，让专业术语识别更准。改动实时生效，无需重启。", [
         ("terms_file", "专业术语",
          "自己维护的专有名词、行业术语、产品名等。每行一个词。",
-         "wordlist", {"file_key": "qwen_context_file", "default": "ai_terms.txt"}),
+         "wordlist", {"file_key": "qwen_context_file", "default": "terms.txt"}),
         ("hotwords_file", "历史热词",
          "程序从你的口述历史里自动提取的高频专业词，可手动增删。每行一个词。",
          "wordlist", {"file": "hotwords.txt"}),
@@ -207,9 +207,9 @@ if __name__ == "__main__":
     with tempfile.TemporaryDirectory() as td:
         td = Path(td)
         cf = td / "config.json"
-        cf.write_text('{"wake_words":["旧"],"paste":true,"unknown":1,"qwen_context_file":"ai_terms.txt"}',
+        cf.write_text('{"wake_words":["旧"],"paste":true,"unknown":1,"qwen_context_file":"terms.txt"}',
                       encoding="utf-8")
-        (td / "ai_terms.txt").write_text("claude\nopenai\n", encoding="utf-8")
+        (td / "terms.txt").write_text("claude\nopenai\n", encoding="utf-8")
         data = settings_data(json.loads(cf.read_text(encoding="utf-8")), td)
         assert set(data.keys()) == {"settings", "hotwords"}
         wake_field = next(f for cat in data["settings"] for f in cat["fields"] if f["key"] == "wake_words")
@@ -227,7 +227,7 @@ if __name__ == "__main__":
         saved = json.loads(cf.read_text(encoding="utf-8"))
         assert saved["wake_words"] == ["新词", "另一个"] and saved["paste"] is True \
             and saved["unknown"] == 1 and "bogus" not in saved, saved
-        assert (td / "ai_terms.txt").read_text(encoding="utf-8").splitlines() \
+        assert (td / "terms.txt").read_text(encoding="utf-8").splitlines() \
             == ["claude", "openai", "anthropic"]
         assert (td / "hotwords.txt").read_text(encoding="utf-8").splitlines() \
             == ["热词一", "热词二"]

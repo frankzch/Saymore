@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""配置：DEFAULT_CONFIG 种子 + config.json 读写 + 转写后置替换表加载。
+"""配置：DEFAULT_CONFIG 种子 + config.json 读写。
 
 DEFAULT_CONFIG 是"种子"。load_config() 启动时把缺失项补写回 config.json，让
 config.json 成为完整的单一配置真源——设置窗口直接读它即所见即所得。用户改过
@@ -55,9 +55,8 @@ DEFAULT_CONFIG = {
     "panel_max_h": 240,
     "overlay": True,             # True=屏幕显示录音状态小圆点
     "overlay_pos": None,         # 小圆窗左上角屏幕坐标 [x,y]；拖动后记住位置
-    "replacements_file": "replacements.json",
     # 无云端 LLM 配置：转写/四种整理/屏幕提词/历史热词全部走本地 llama-server + 多 LoRA
-    "qwen_context_file": "ai_terms.txt",
+    "qwen_context_file": "terms.txt",
     "bias_max_terms": 80,        # 长段偏置词表总上限（不含命令词）；优先级：命令词>屏幕热词>静态术语>历史热词
     "screen_bias_max_terms": 10, # 屏幕热词份额硬上限
     "static_bias_max_terms": 30, # 静态术语份额硬上限；历史热词无 cap，吃剩余
@@ -97,30 +96,3 @@ def load_config():
     return cfg
 
 
-def load_replacements(filename):
-    """读取 错→对 替换表（JSON 对象）。文件不存在返回空表。"""
-    if not filename:
-        return {}
-    path = _resolve(filename)
-    if not path.exists():
-        return {}
-    try:
-        data = json.loads(path.read_text(encoding="utf-8"))
-        if isinstance(data, dict):
-            print(f"[info] 已加载 {len(data)} 条替换规则")
-            return {str(k): str(v) for k, v in data.items()}
-    except Exception as e:
-        print(f"[warn] 读取替换表失败，已跳过: {e}")
-    return {}
-
-
-def apply_replacements(text, replacements):
-    """应用替换。纯 ASCII 的键按词边界、忽略大小写替换（用于大小写纠正，
-    如 llm/Llm/LLM -> LLM）；含中文等非 ASCII 的键按原样直接替换。"""
-    for wrong, right in replacements.items():
-        if wrong.isascii():
-            pat = r"(?<![A-Za-z0-9])" + re.escape(wrong) + r"(?![A-Za-z0-9])"
-            text = re.sub(pat, right, text, flags=re.IGNORECASE)
-        else:
-            text = text.replace(wrong, right)
-    return text

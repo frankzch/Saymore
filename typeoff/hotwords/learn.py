@@ -3,7 +3,7 @@
 数据文件（均在脚本目录，不入库）：
   typed_history/YYYY-MM-DD.jsonl  口述文本快照，按天一个文件
   hotwords.json        各文件已处理行数 done + 全量词频
-  hotwords.txt         频次 Top 词表（一行一词，与 ai_terms.txt 同格式）
+  hotwords.txt         频次 Top 词表（一行一词，与 terms.txt 同格式）
 （旧的单文件 typed_history.jsonl 首次运行时自动按日期拆进目录，改名 .bak 留档）
 """
 import json
