@@ -1,0 +1,602 @@
+[
+  {
+    "tag": "ai",
+    "count": 609
+  },
+  {
+    "tag": "claude",
+    "count": 241
+  },
+  {
+    "tag": "anthropic",
+    "count": 221
+  },
+  {
+    "tag": "openai",
+    "count": 162
+  },
+  {
+    "tag": "chatgpt",
+    "count": 136
+  },
+  {
+    "tag": "llm",
+    "count": 135
+  },
+  {
+    "tag": "codex",
+    "count": 119
+  },
+  {
+    "tag": "ai coding",
+    "count": 87
+  },
+  {
+    "tag": "ai agents",
+    "count": 86
+  },
+  {
+    "tag": "gemini",
+    "count": 75
+  },
+  {
+    "tag": "open-source",
+    "count": 72
+  },
+  {
+    "tag": "ai safety",
+    "count": 70
+  },
+  {
+    "tag": "productivity",
+    "count": 63
+  },
+  {
+    "tag": "automation",
+    "count": 55
+  },
+  {
+    "tag": "developer tools",
+    "count": 50
+  },
+  {
+    "tag": "fable",
+    "count": 48
+  },
+  {
+    "tag": "ai tools",
+    "count": 46
+  },
+  {
+    "tag": "crypto",
+    "count": 42
+  },
+  {
+    "tag": "google",
+    "count": 42
+  },
+  {
+    "tag": "apple",
+    "count": 40
+  },
+  {
+    "tag": "nvidia",
+    "count": 36
+  },
+  {
+    "tag": "prompt engineering",
+    "count": 36
+  },
+  {
+    "tag": "software engineering",
+    "count": 36
+  },
+  {
+    "tag": "coding",
+    "count": 35
+  },
+  {
+    "tag": "ipo",
+    "count": 33
+  },
+  {
+    "tag": "claude code",
+    "count": 32
+  },
+  {
+    "tag": "fable5",
+    "count": 32
+  },
+  {
+    "tag": "spacex",
+    "count": 32
+  },
+  {
+    "tag": "mythos",
+    "count": 31
+  },
+  {
+    "tag": "off-topic",
+    "count": 31
+  },
+  {
+    "tag": "vibe coding",
+    "count": 31
+  },
+  {
+    "tag": "privacy",
+    "count": 30
+  },
+  {
+    "tag": "ai video",
+    "count": 29
+  },
+  {
+    "tag": "generative ai",
+    "count": 29
+  },
+  {
+    "tag": "social media",
+    "count": 29
+  },
+  {
+    "tag": "grok",
+    "count": 28
+  },
+  {
+    "tag": "agi",
+    "count": 27
+  },
+  {
+    "tag": "ai agent",
+    "count": 27
+  },
+  {
+    "tag": "pricing",
+    "count": 27
+  },
+  {
+    "tag": "ai ethics",
+    "count": 25
+  },
+  {
+    "tag": "education",
+    "count": 25
+  },
+  {
+    "tag": "siri",
+    "count": 25
+  },
+  {
+    "tag": "marketing",
+    "count": 24
+  },
+  {
+    "tag": "ai models",
+    "count": 23
+  },
+  {
+    "tag": "ai art",
+    "count": 21
+  },
+  {
+    "tag": "deepseek",
+    "count": 21
+  },
+  {
+    "tag": "elon musk",
+    "count": 21
+  },
+  {
+    "tag": "web3",
+    "count": 21
+  },
+  {
+    "tag": "security",
+    "count": 20
+  },
+  {
+    "tag": "humor",
+    "count": 19
+  },
+  {
+    "tag": "benchmark",
+    "count": 18
+  },
+  {
+    "tag": "image generation",
+    "count": 18
+  },
+  {
+    "tag": "trading",
+    "count": 18
+  },
+  {
+    "tag": "workflow",
+    "count": 18
+  },
+  {
+    "tag": "agents",
+    "count": 17
+  },
+  {
+    "tag": "future of work",
+    "count": 17
+  },
+  {
+    "tag": "local ai",
+    "count": 17
+  },
+  {
+    "tag": "microsoft",
+    "count": 17
+  },
+  {
+    "tag": "bubble",
+    "count": 16
+  },
+  {
+    "tag": "startup",
+    "count": 16
+  },
+  {
+    "tag": "enterprise ai",
+    "count": 15
+  },
+  {
+    "tag": "subscription",
+    "count": 15
+  },
+  {
+    "tag": "fable 5",
+    "count": 14
+  },
+  {
+    "tag": "gpt",
+    "count": 14
+  },
+  {
+    "tag": "infrastructure",
+    "count": 14
+  },
+  {
+    "tag": "investment",
+    "count": 14
+  },
+  {
+    "tag": "agent",
+    "count": 13
+  },
+  {
+    "tag": "ai hype",
+    "count": 13
+  },
+  {
+    "tag": "ai image generation",
+    "count": 13
+  },
+  {
+    "tag": "ai infrastructure",
+    "count": 13
+  },
+  {
+    "tag": "blockchain",
+    "count": 13
+  },
+  {
+    "tag": "cursor",
+    "count": 13
+  },
+  {
+    "tag": "hype",
+    "count": 13
+  },
+  {
+    "tag": "ai model",
+    "count": 12
+  },
+  {
+    "tag": "ai pricing",
+    "count": 12
+  },
+  {
+    "tag": "bitcoin",
+    "count": 12
+  },
+  {
+    "tag": "career",
+    "count": 12
+  },
+  {
+    "tag": "china",
+    "count": 12
+  },
+  {
+    "tag": "data centers",
+    "count": 12
+  },
+  {
+    "tag": "ios",
+    "count": 12
+  },
+  {
+    "tag": "politics",
+    "count": 12
+  },
+  {
+    "tag": "valuation",
+    "count": 12
+  },
+  {
+    "tag": "wwdc",
+    "count": 12
+  },
+  {
+    "tag": "critical thinking",
+    "count": 11
+  },
+  {
+    "tag": "developer experience",
+    "count": 11
+  },
+  {
+    "tag": "jobs",
+    "count": 11
+  },
+  {
+    "tag": "mcp",
+    "count": 11
+  },
+  {
+    "tag": "programming",
+    "count": 11
+  },
+  {
+    "tag": "reddit",
+    "count": 11
+  },
+  {
+    "tag": "safety",
+    "count": 11
+  },
+  {
+    "tag": "skepticism",
+    "count": 11
+  },
+  {
+    "tag": "user experience",
+    "count": 11
+  },
+  {
+    "tag": "xai",
+    "count": 11
+  },
+  {
+    "tag": "api",
+    "count": 10
+  },
+  {
+    "tag": "cloud computing",
+    "count": 10
+  },
+  {
+    "tag": "code quality",
+    "count": 10
+  },
+  {
+    "tag": "creativity",
+    "count": 10
+  },
+  {
+    "tag": "gaming",
+    "count": 10
+  },
+  {
+    "tag": "meta",
+    "count": 10
+  },
+  {
+    "tag": "regulation",
+    "count": 10
+  },
+  {
+    "tag": "trump",
+    "count": 10
+  },
+  {
+    "tag": "ai bubble",
+    "count": 9
+  },
+  {
+    "tag": "ai costs",
+    "count": 9
+  },
+  {
+    "tag": "ai policy",
+    "count": 9
+  },
+  {
+    "tag": "controversy",
+    "count": 9
+  },
+  {
+    "tag": "cost",
+    "count": 9
+  },
+  {
+    "tag": "deepfake",
+    "count": 9
+  },
+  {
+    "tag": "design",
+    "count": 9
+  },
+  {
+    "tag": "ethics",
+    "count": 9
+  },
+  {
+    "tag": "india",
+    "count": 9
+  },
+  {
+    "tag": "memory",
+    "count": 9
+  },
+  {
+    "tag": "opus",
+    "count": 9
+  },
+  {
+    "tag": "reasoning",
+    "count": 9
+  },
+  {
+    "tag": "reinforcement learning",
+    "count": 9
+  },
+  {
+    "tag": "robotics",
+    "count": 9
+  },
+  {
+    "tag": "saas",
+    "count": 9
+  },
+  {
+    "tag": "satire",
+    "count": 9
+  },
+  {
+    "tag": "seo",
+    "count": 9
+  },
+  {
+    "tag": "software development",
+    "count": 9
+  },
+  {
+    "tag": "startups",
+    "count": 9
+  },
+  {
+    "tag": "transparency",
+    "count": 9
+  },
+  {
+    "tag": "tutorial",
+    "count": 9
+  },
+  {
+    "tag": "venture capital",
+    "count": 9
+  },
+  {
+    "tag": "agentic ai",
+    "count": 8
+  },
+  {
+    "tag": "ai assistant",
+    "count": 8
+  },
+  {
+    "tag": "ai automation",
+    "count": 8
+  },
+  {
+    "tag": "ai comparison",
+    "count": 8
+  },
+  {
+    "tag": "ai design",
+    "count": 8
+  },
+  {
+    "tag": "ai regulation",
+    "count": 8
+  },
+  {
+    "tag": "ai research",
+    "count": 8
+  },
+  {
+    "tag": "censorship",
+    "count": 8
+  },
+  {
+    "tag": "cryptocurrency",
+    "count": 8
+  },
+  {
+    "tag": "energy",
+    "count": 8
+  },
+  {
+    "tag": "enterprise",
+    "count": 8
+  },
+  {
+    "tag": "game development",
+    "count": 8
+  },
+  {
+    "tag": "gpt image 2",
+    "count": 8
+  },
+  {
+    "tag": "gpt-5.5",
+    "count": 8
+  },
+  {
+    "tag": "gpt-5.6",
+    "count": 8
+  },
+  {
+    "tag": "higgsfield",
+    "count": 8
+  },
+  {
+    "tag": "job displacement",
+    "count": 8
+  },
+  {
+    "tag": "learning",
+    "count": 8
+  },
+  {
+    "tag": "loops",
+    "count": 8
+  },
+  {
+    "tag": "machine learning",
+    "count": 8
+  },
+  {
+    "tag": "misinformation",
+    "count": 8
+  },
+  {
+    "tag": "perplexity",
+    "count": 8
+  },
+  {
+    "tag": "stock market",
+    "count": 8
+  },
+  {
+    "tag": "technology",
+    "count": 8
+  },
+  {
+    "tag": "usage limits",
+    "count": 8
+  },
+  {
+    "tag": "ai competition",
+    "count": 7
+  },
+  {
+    "tag": "ai cost",
+    "count": 7
+  }
+]

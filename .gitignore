@@ -1,0 +1,65 @@
+__pycache__/
+*.pyc
+.venv/
+venv/
+env/
+# 用户本地设置：含唤醒词/设备/模型路径/悬浮窗位置等机器相关项，load_config() 首次运行
+# 会从 DEFAULT_CONFIG 自动生成，不该入库（否则不同机器互相覆盖对方的真实配置）
+config.json
+.ready
+.import_trigger
+.restart_trigger
+.tray_notice
+.tray_notice_seen
+# faster-whisper 下载的模型缓存
+models/
+*.bin
+.DS_Store
+# sherpa-onnx KWS 模型（解压自 release，可重新下载）
+kws-model/
+# SenseVoice ASR 模型（onnx 体积大，可重新下载）
+sensevoice-model/
+voice_input.log
+logs/
+# 提醒数据：用户隐私，运行时生成，不入库
+reminders.json
+reminders.json.migrated.bak
+reminders/
+reminders_log.jsonl
+# 热词自学习数据：用户输入历史含隐私，运行时生成，不入库
+typed_history.jsonl
+typed_history.jsonl.bak
+typed_history/
+hotwords.json
+hotwords.txt
+
+# 猫动画：仅入库运行时加载的透明帧 *_t.png；2048 原图与原始照片是再生成素材，体积大且含隐私，不入库
+2022409892.jpg
+cat_src/*.png
+!cat_src/*_t.png
+
+# 微调工作区：训练脚本 / 数据集 / checkpoint 全部不公开；成品 LoRA 已迁至 cleanup_lora/ 随仓库分发
+finetune/
+gpu_monitor.log
+# VAD 模型二进制，可从 silero-vad 官方下载
+silero_vad.onnx
+
+# llama.cpp 预编译二进制（qwen_gguf 引擎用，可从 llama.cpp releases 重新下载）
+llama-cpp/
+.gstack/
+# ASR 评测：测试音频(prepare_data.py 按需从 ModelScope 重下)+ 评测产物，可再生，不入库
+asr_eval/data/
+
+# 内部规划 / 代码地图 / AI 助手规则：仅本地工作用，不公开
+ARCHITECTURE.md
+CLAUDE.md
+PLAN-panel-and-features.md
+
+# 迁至 cleanup_lora/ 的独立副本；根目录旧文件不再入库（避免与 cleanup_lora/ 内的重复）
+deep_prompt.txt
+
+# Claude Code / 各类 AI 助手本地状态
+.claude/
+
+# 旧仓库私有历史备份（含 finetune 提交历史，仅供本地翻查，不入公开库）
+.git.private-backup/
