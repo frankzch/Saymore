@@ -161,7 +161,7 @@ Qwen3-ASR 跑在 [llama.cpp](https://github.com/ggml-org/llama.cpp)（常驻 `ll
 
 停顿几秒后程序会自动调用**本地整理模型**（Qwen3-0.6B + 自训 LoRA，跑在同一个 llama.cpp 后端里，复用显存），把口语文本改成通顺书面语。四种人格（保守/深度/邮件/00后）用同一份 adapter，靠 system 提示词切换，在设置面板里选默认整理模式。
 
-成品 LoRA 权重和四份人格提示词随仓库分发在 [`cleanup_lora/`](cleanup_lora/) 目录下，克隆即用，不需要自己训练。
+成品 LoRA 权重和四份人格提示词随仓库分发在 [`polish_lora/`](polish_lora/) 目录下，克隆即用，不需要自己训练。
 
 ## 说明
 

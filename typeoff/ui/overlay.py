@@ -8,6 +8,7 @@ import json
 import threading
 import time
 from ctypes import wintypes
+from pathlib import Path
 
 import numpy as np
 
@@ -60,14 +61,14 @@ def _draw_tokens(canvas, w, strip_h, tin, tout, fade):
 
 
 def _get_cat_frames():
-    """从 cat_src/ 加载猫的姿势 PNG，按 alpha 边界裁切、缩放居中到超采样画布，缓存返回。
+    """从 typeoff/ui/assets/ 加载猫的姿势 PNG，按 alpha 边界裁切、缩放居中到超采样画布，缓存返回。
     返回 {状态名: 超采样 RGBA 图} 的 dict；缺图则返回 None（退回纯进度环）。"""
     global _CAT_FRAMES
     if _CAT_FRAMES is not None:
         return _CAT_FRAMES or None
     from PIL import Image
     SD = _OV_D * _OV_SS
-    d = CONFIG_PATH.parent / "cat_src"
+    d = Path(__file__).parent / "assets"
 
     def load(name, vstretch=1.0):
         im = Image.open(d / name).convert("RGBA")

@@ -60,7 +60,7 @@ CHANGE_RATIO_THRESHOLD = 0.2
 
 def parse_terms(out, topn=TOP_N):
     """把模型输出(逗号或换行分隔，可能带编号/符号)解析成词表：去噪、去重、限量。
-    不按空格切——保留 'Bonsai 8B'、'cleanup LoRA' 这类多词术语。"""
+    不按空格切——保留 'Bonsai 8B'、'polish LoRA' 这类多词术语。"""
     terms, seen = [], set()
     for piece in _SPLIT.split(out or ""):
         w = _NUM_PREFIX.sub("", piece)

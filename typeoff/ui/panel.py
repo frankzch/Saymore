@@ -600,19 +600,19 @@ class TextBuffer:
     结果的新句）。用户停止说话后等 quiet_seconds 秒再触发整理（小范围走滑动窗口，
     深度/邮件/00后 对全文跑一次并冻结）。只有发送/flush_all 才整体回填输入框——
     攒多少字、静默多久都不自动回填。
-    整理(cleanup: str->str)与回填(paste: str->None)由外部注入，本类不碰模型/剪贴板。"""
+    整理(polish: str->str)与回填(paste: str->None)由外部注入，本类不碰模型/剪贴板。"""
 
-    def __init__(self, cleanup, paste, quiet_seconds=5.0, immediate=False,
+    def __init__(self, polish, paste, quiet_seconds=5.0, immediate=False,
                  min_confidence=0.6, context_chars=80,
-                 cleanup_mode="小范围整理", full_cleanup=None):
-        self.cleanup = cleanup          # str -> (整理文本, 置信度|None)，小范围滑动窗口用
+                 polish_mode="小范围整理", full_polish=None):
+        self.polish = polish            # str -> (整理文本, 置信度|None)，小范围滑动窗口用
         self.paste = paste
         self.quiet_seconds = quiet_seconds
         self.immediate = immediate
         self.min_confidence = min_confidence
         self.context_chars = context_chars
-        self.cleanup_mode = cleanup_mode
-        self.full_cleanup = full_cleanup  # (text, mode) -> (整理文本, 置信度|None)，深度/邮件/00后用
+        self.polish_mode = polish_mode
+        self.full_polish = full_polish  # (text, mode) -> (整理文本, 置信度|None)，深度/邮件/00后用
         self.frozen = ""
         self.clean_text = ""
         self.clean_conf = None
@@ -623,7 +623,7 @@ class TextBuffer:
         self._speech_ended_at = None    # 话音落时刻；None=没在倒计时
         self.cleaning_mode = None       # 后台正在跑的整理模式；None=没在整理。供面板显示"XX中…"
         self._paused = False            # 面板编辑中：True 时跳过自动整理触发，避免和用户手改的字打架
-        self._edit_needs_cleanup = False  # 进入编辑态时是否还有未整理内容（倒计时没走完），决定保存后要不要接着整理
+        self._edit_needs_polish = False  # 进入编辑态时是否还有未整理内容（倒计时没走完），决定保存后要不要接着整理
         self._seg_lock = threading.Lock()
         self._commit_lock = threading.Lock()
         self._clean_lock = threading.Lock()
@@ -656,7 +656,7 @@ class TextBuffer:
         "用户已确认无需整理"，得接着走整理，否则这段文字永远不会被整理。"""
         self._paused = True
         with self._seg_lock:
-            self._edit_needs_cleanup = bool(self.raw_segs)
+            self._edit_needs_polish = bool(self.raw_segs)
 
     def resume(self):
         """退出编辑态：恢复自动整理。倒计时期间时间没停，多半已到点，下一 tick 就会立刻触发一次。"""
@@ -674,37 +674,37 @@ class TextBuffer:
             if time.time() - t < self.quiet_seconds:
                 continue
             has_work = bool(self.raw_segs)
-            if not has_work and self.cleanup_mode != "小范围整理":
+            if not has_work and self.polish_mode != "小范围整理":
                 with self._seg_lock:
                     has_work = bool(self.clean_text or self.raw_segs)
             if has_work:
-                if self.cleanup_mode == "小范围整理":
+                if self.polish_mode == "小范围整理":
                     self._clean_pending()
                 else:
-                    self._full_cleanup_pending()
+                    self._full_polish_pending()
             self._speech_ended_at = None
 
-    def trigger_cleanup_now(self):
+    def trigger_polish_now(self):
         """不等 quiet_seconds 倒计时，立即触发一次整理（语音命令"文本整理"用）。"""
         if self.immediate or self._paused:
             return
         has_work = bool(self.raw_segs)
-        if not has_work and self.cleanup_mode != "小范围整理":
+        if not has_work and self.polish_mode != "小范围整理":
             with self._seg_lock:
                 has_work = bool(self.clean_text or self.raw_segs)
         if not has_work:
             return
-        if self.cleanup_mode == "小范围整理":
+        if self.polish_mode == "小范围整理":
             self._clean_pending()
         else:
-            self._full_cleanup_pending()
+            self._full_polish_pending()
         self._speech_ended_at = None
 
-    def _full_cleanup_pending(self):
+    def _full_polish_pending(self):
         """对全文跑深度/邮件/00后整理，结果 integrate 冻结。整理期间（LLM 调用耗时数秒）
         若缓存被清空/改动（如说了休眠词触发 clear()），本轮结果作废，避免整理线程收尾时
         把已清空的缓存又重新写回、面板卡着不消失。"""
-        if not self.full_cleanup:
+        if not self.full_polish:
             self._clean_pending()
             return
         with self._clean_lock:
@@ -713,11 +713,11 @@ class TextBuffer:
                 all_text = (snap_frozen + snap_clean + "".join(snap_raws)).strip()
             if not all_text:
                 return
-            self.cleaning_mode = self.cleanup_mode
+            self.cleaning_mode = self.polish_mode
             try:
-                out, _conf = self.full_cleanup(all_text, self.cleanup_mode)
+                out, _conf = self.full_polish(all_text, self.polish_mode)
             except Exception as e:
-                print(f"[warn] {self.cleanup_mode}失败：{e}")
+                print(f"[warn] {self.polish_mode}失败：{e}")
                 return
             finally:
                 self.cleaning_mode = None
@@ -785,7 +785,7 @@ class TextBuffer:
         整段当作已整理文本落地、不用模型再复核；若进编辑前还在倒计时（内容从没整理过），
         编辑只是顺手改个字，不代表用户要跳过整理，整段照样当新句扔回去接着走整理流程。"""
         with self._seg_lock:
-            if self._edit_needs_cleanup:
+            if self._edit_needs_polish:
                 self.frozen, self.clean_text, self.clean_conf, self.raw_segs = "", "", None, [text]
             else:
                 self.frozen, self.clean_text, self.clean_conf, self.raw_segs = "", text, None, []
@@ -813,7 +813,7 @@ class TextBuffer:
     def _clean_call(self, text):
         """整理一段文字，返回 (文本, 置信度)。调用方须已持 _clean_lock；失败兜底回原文，别丢话。"""
         try:
-            out, conf = self.cleanup(text)
+            out, conf = self.polish(text)
             return (out or text), conf
         except Exception:
             return text, None
@@ -893,7 +893,7 @@ if __name__ == "__main__":
     def cln(t):
         calls.append(t)
         return t.upper(), 0.9
-    b = TextBuffer(cleanup=cln, paste=got.append, quiet_seconds=0.01)
+    b = TextBuffer(polish=cln, paste=got.append, quiet_seconds=0.01)
     b.add("aa。"); settle(b)
     assert got == [] and b.text == "AA。", (got, b.text)
     b.add("bb。"); settle(b)
@@ -904,11 +904,11 @@ if __name__ == "__main__":
     b.flush_all()
     assert got == ["AA。BB。" + "CCCCCC。" * 5] and b.text == "", (got, b.text)
     assert b.undo() is False
-    b2 = TextBuffer(cleanup=lambda t: (t, None), paste=lambda t: None, quiet_seconds=999)
+    b2 = TextBuffer(polish=lambda t: (t, None), paste=lambda t: None, quiet_seconds=999)
     b2.clean_text = "AA。"
     b2.add("bb。")
     assert b2.text_parts == ("AA。", "bb。", False), b2.text_parts
-    b3 = TextBuffer(cleanup=lambda t: (t.upper(), 0.9), paste=lambda t: None, quiet_seconds=0.01)
+    b3 = TextBuffer(polish=lambda t: (t.upper(), 0.9), paste=lambda t: None, quiet_seconds=0.01)
     b3.add("x。"); assert b3.undo() is True and b3.text == ""
     b3.add("y。z。y。z。"); settle(b3)
     assert b3.undo() is True and b3.text == "Y。Z。Y。", b3.text
@@ -917,7 +917,7 @@ if __name__ == "__main__":
     im.add("a"); im.add("b")
     assert got2 == ["a", "b"], got2
     conf4, got4 = {"v": 0.3}, []
-    b4 = TextBuffer(cleanup=lambda t: (t.upper(), conf4["v"]), paste=got4.append, quiet_seconds=0.01)
+    b4 = TextBuffer(polish=lambda t: (t.upper(), conf4["v"]), paste=got4.append, quiet_seconds=0.01)
     b4.add("m。"); settle(b4)
     assert b4.text_parts == ("M。", "", True), b4.text_parts
     assert b4.flush_all() is False and got4 == [] and b4.text == "M。"
@@ -925,7 +925,7 @@ if __name__ == "__main__":
     b4.add("n。"); settle(b4)
     assert b4.text_parts == ("M。N。", "", False), b4.text_parts
     assert b4.flush_all() is True and got4 == ["M。N。"] and b4.text == ""
-    b5 = TextBuffer(cleanup=lambda t: (t.upper(), 0.3), paste=lambda t: None, quiet_seconds=999)
+    b5 = TextBuffer(polish=lambda t: (t.upper(), 0.3), paste=lambda t: None, quiet_seconds=999)
     b5.clean_text, b5.raw_segs = "旧文本。", ["新句。"]
     b5.replace_all("手动改过的文本。")
     assert b5.text_parts == ("手动改过的文本。", "", False), b5.text_parts
@@ -934,8 +934,8 @@ if __name__ == "__main__":
     def fake_full(text, mode):
         full_calls.append((text, mode))
         return f"【{mode}】{text.upper()}", 0.9
-    b6 = TextBuffer(cleanup=cln, paste=lambda t: None, quiet_seconds=0.01,
-                    cleanup_mode="深度整理", full_cleanup=fake_full)
+    b6 = TextBuffer(polish=cln, paste=lambda t: None, quiet_seconds=0.01,
+                    polish_mode="深度整理", full_polish=fake_full)
     b6.add("hello。"); _trigger(b6); time.sleep(0.1)
     # 深度整理应把全文 integrate 进 frozen
     for _ in range(200):

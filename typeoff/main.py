@@ -117,13 +117,13 @@ def main():
     # 整理 LoRA：合一 multi LoRA 挂给 llama-server——一个进程内 转写 + 四风格整理
     # （保守/深度/邮件/00后 同一 adapter，靠 system 切人格；finetune/ROUNDS.md multi 轮）。
     _loras = {}
-    import typeoff.cleanup.local as _lc  # find_gguf 只做 gguf 定位
+    import typeoff.polish.local as _lc  # find_gguf 只做 gguf 定位
     _want = []
-    if cfg.get("local_cleanup"):
+    if cfg.get("local_polish"):
         if _lc.find_gguf("multi-lora.gguf"):
             _want.append(("multi", "multi-lora.gguf"))
         else:  # 回滚到老双人格（multi-lora.gguf 被移走时）
-            _want += [("basic", "cleanup-lora.gguf"), ("deep", "deep-lora.gguf")]
+            _want += [("basic", "polish-lora.gguf"), ("deep", "deep-lora.gguf")]
     _want.append(("reminder", "reminder-lora.gguf"))  # 提醒人格：与整理开关无关，提醒走本地就得挂（ROUNDS.md K1）
     _want.append(("extract", "extract-lora.gguf"))  # 屏幕提词人格：独立 LoRA，挑"不常见词"（ROUNDS.md M1）；缺文件则 extract() 退回已挂人格
     for _role, _fn in _want:
@@ -197,7 +197,7 @@ def main():
     # 总量封顶防稀释注意力+拖慢。屏幕热词实时变故每次现拼；两个文件按 mtime 缓存词表，改了自动重载。
     command_words = [
         w for k in ("send_words", "confirm_words", "undo_words",
-                     "clear_words", "cleanup_words", "sleep_words", "quit_words",
+                     "clear_words", "polish_words", "sleep_words", "quit_words",
                      "reminder_enter_words", "reminder_to_dictation_words")
         for w in cfg.get(k, [])]
     static_path = None
@@ -301,7 +301,7 @@ def main():
     confirm_words = set(cfg.get("confirm_words", []))
     undo_words = set(cfg.get("undo_words", []))
     clear_words = set(cfg.get("clear_words", []))
-    cleanup_words = set(cfg.get("cleanup_words", []))
+    polish_words = set(cfg.get("polish_words", []))
     sleep_words = set(cfg.get("sleep_words", []))
     quit_words = set(cfg.get("quit_words", []))
     reminder_enter_words = set(cfg.get("reminder_enter_words", []))
@@ -402,10 +402,10 @@ def main():
             click_permission_button(focus_title)  # 优先"总是允许"，否则"允许一次"
             ack_cue()
             return True
-        if cmd in cleanup_words:
+        if cmd in polish_words:
             state["nod_until"] = time.time() + 0.9  # 执行命令：猫点头致意
             if state.get("panel") is not None:
-                state["panel"].trigger_cleanup_now()
+                state["panel"].trigger_polish_now()
                 print("[done] 语音命令：立即触发整理")
             ack_cue()
             return True
@@ -418,28 +418,28 @@ def main():
             return True
         return False
 
-    def _run_cleanup(text, mode):
+    def _run_polish(text, mode):
         """按 mode（小范围整理/深度整理）跑一遍本地整理，返回 (整理文本, 置信度|None)。
         走 llama-server + 整理 LoRA（GPU 亚秒级，与转写同进程）。"""
-        if not cfg.get("local_cleanup") or not llama_asr.lora:
+        if not cfg.get("local_polish") or not llama_asr.lora:
             return text, None
         # 太短且无句读的整段（如只说了个"嗯"）不进 LLM：小 LoRA 对超短输入会
         # 幻觉出提示词模板，输出一堆"看着像整理结果"的东西。
         core = text.strip()
         if len(core) < 5 and not any(c in core for c in "，。！？、,.!?;；：:"):
             return text, None
-        import typeoff.cleanup.local as local_cleanup  # 取该 mode 的提示词（训推一致：合一 LoRA 靠 system 切人格）
+        import typeoff.polish.local as local_polish  # 取该 mode 的提示词（训推一致：合一 LoRA 靠 system 切人格）
         # 合一 multi 挂着就恒走它（四风格同一 adapter）；回滚到老双人格时才按 mode 分 deep/basic。
         role = "multi" if "multi" in llama_asr.loras else ("deep" if mode == "深度整理" else "basic")
         try:
-            return llama_asr.cleanup(text, system=local_cleanup.system_for(mode), role=role)
+            return llama_asr.polish(text, system=local_polish.system_for(mode), role=role)
         except Exception as e:
             print(f"[warn] llama-server 整理失败，原样回填: {e}")
             return text, None
 
-    def cleanup_text(text):
+    def polish_text(text):
         """小范围整理（滑动窗口用）：逐句删口水/修错/断句。"""
-        return _run_cleanup(text, "小范围整理")
+        return _run_polish(text, "小范围整理")
 
     def commit_text(text):
         """整理后的整段文字回填输入框，登记回退栈。由 TextBuffer 触发（发送/输入 命令都会走到这）。
@@ -460,13 +460,13 @@ def main():
         state["last_filled"] = text  # 缓存窗口回填进输入框的最终文本，发送时直接写历史/热词
 
     buffer = panel.TextBuffer(
-        cleanup=cleanup_text, paste=commit_text,
-        quiet_seconds=cfg.get("cleanup_quiet_seconds", 5.0),
+        polish=polish_text, paste=commit_text,
+        quiet_seconds=cfg.get("polish_quiet_seconds", 5.0),
         immediate=not cfg.get("panel", True),
-        min_confidence=cfg.get("cleanup_min_confidence", 0.6),
-        context_chars=cfg.get("cleanup_context_chars", 80),
-        cleanup_mode=cfg.get("cleanup_mode", "小范围整理"),
-        full_cleanup=lambda text, mode: _run_cleanup(text, mode),
+        min_confidence=cfg.get("polish_min_confidence", 0.6),
+        context_chars=cfg.get("polish_context_chars", 80),
+        polish_mode=cfg.get("polish_mode", "小范围整理"),
+        full_polish=lambda text, mode: _run_polish(text, mode),
     )
     state["panel"] = buffer  # 供悬浮窗渲染面板文字、enter_sleep 收尾
 

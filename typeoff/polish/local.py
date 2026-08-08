@@ -1,19 +1,19 @@
 # -*- coding: utf-8 -*-
-"""本地文本整理：整理 LoRA 的 GGUF 定位 + 四人格提示词管理。
+"""本地文本整理（polish）：整理 LoRA 的 GGUF 定位 + 四人格提示词管理。
 
 生产路径走 llama-server + 合一 multi LoRA（保守/深度/邮件/00后 同一 adapter，
-靠 system 提示词切人格），见 asr_llamacpp.py。
+靠 system 提示词切人格），见 asr/llamacpp.py。
 本模块只提供 find_gguf（定位 LoRA GGUF 文件）和 system_for（按模式返回训练时的提示词）。
 """
 from pathlib import Path
 
 from typeoff.paths import PROJECT_ROOT
 
-_LORA_DIR = PROJECT_ROOT / "cleanup_lora"
+_LORA_DIR = PROJECT_ROOT / "polish_lora"
 
 
 def find_gguf(name):
-    """按文件名在 cleanup_lora/ 下定位整理 LoRA 的 GGUF；供 voice_input 给 llama-server 挂 LoRA 用。
+    """按文件名在 polish_lora/ 下定位整理 LoRA 的 GGUF；供 voice_input 给 llama-server 挂 LoRA 用。
     找不到返回 None（如可选的 reminder/extract LoRA 未随仓库分发时，功能自动降级）。"""
     p = _LORA_DIR / name
     return str(p) if p.exists() else None

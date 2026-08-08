@@ -3,11 +3,11 @@
 
 用法（voice_input.py 的 asr_engine="qwen_gguf" 时）：
     asr = LlamaASR(exe=..., model=..., mmproj=..., port=8901, ngl=99,  # 0=纯CPU，99=全部丢GPU
-                   loras={"basic": "cleanup-lora.gguf", "deep": "deep-lora.gguf"})
+                   loras={"basic": "polish-lora.gguf", "deep": "deep-lora.gguf"})
     asr.start()                 # 启动 llama-server 并等就绪（模型加载约几秒）
     text, conf = asr.transcribe(audio_f32, 16000, context="术语表", language="Chinese")
     # conf: 生成 token 平均 logprob 的 exp（0..1，越高越有把握）；服务端没返回 logprobs 时为 None
-    clean, conf = asr.cleanup("嗯就是那个...", system=提示词, role="basic")  # 整理人格（需 loras）
+    clean, conf = asr.polish("嗯就是那个...", system=提示词, role="basic")   # 整理人格（需 loras）
     asr.stop()                  # 休眠卸载：杀进程释放显存
 
 与 qwen_asr(PyTorch) 的 prompt 约定一致：system=context 热词偏置，user=音频，
@@ -142,7 +142,7 @@ class LlamaASR:
         return self._strip_prefix(text), self._confidence(choice)
 
     # ---------- 整理 ----------
-    def cleanup(self, text, system, role="basic", timeout=120):
+    def polish(self, text, system, role="basic", timeout=120):
         """整理人格：同一份权重 + 对应角色的整理 LoRA(scale=1) 把口语原文整理。
         role: basic=保守整理 / deep=深度整理。system 用该 LoRA 训练时的提示词（训推一致）。
         未挂 loras 时原样返回；role 不存在则退到 basic（或任一已挂角色）。
