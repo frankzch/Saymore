@@ -10,7 +10,7 @@
 param([switch]$Uninstall, [switch]$Elevated)
 
 $ErrorActionPreference = "Stop"
-$TaskName = "VoiceInputCN"
+$TaskName = "Typeoff"
 
 if ($Uninstall) {
     Unregister-ScheduledTask -TaskName $TaskName -Confirm:$false
@@ -19,7 +19,6 @@ if ($Uninstall) {
 }
 
 $here = Split-Path -Parent $MyInvocation.MyCommand.Definition
-$script = Join-Path $here "voice_input.py"
 
 # pythonw.exe 与当前 python 同目录（无黑窗口）；激活 venv 后会指向 venv 的解释器
 $py = (Get-Command python).Source
@@ -27,7 +26,7 @@ $pythonw = Join-Path (Split-Path $py) "pythonw.exe"
 if (-not (Test-Path $pythonw)) { $pythonw = $py }
 Write-Host "使用解释器：$pythonw"
 
-$action    = New-ScheduledTaskAction -Execute $pythonw -Argument "`"$script`"" -WorkingDirectory $here
+$action    = New-ScheduledTaskAction -Execute $pythonw -Argument "-m typeoff.main" -WorkingDirectory $here
 $trigger   = New-ScheduledTaskTrigger -AtLogOn -User $env:USERNAME
 $runLevel  = if ($Elevated) { "Highest" } else { "Limited" }
 $principal = New-ScheduledTaskPrincipal -UserId $env:USERNAME -LogonType Interactive -RunLevel $runLevel

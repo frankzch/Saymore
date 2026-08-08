@@ -11,11 +11,10 @@ from ctypes import wintypes
 
 import numpy as np
 
-import panel
-import tray
-import ui_style
-
-from paths import CONFIG_PATH
+import typeoff.ui.panel as panel
+import typeoff.ui.tray as tray
+import typeoff.ui.style as ui_style
+from typeoff.paths import CONFIG_PATH
 
 _ICON_PATH = CONFIG_PATH.parent / "typeoff.ico"
 
@@ -342,7 +341,7 @@ def run_overlay(state):
             if warming:                                           # 冷启动中：完全静止，代表停止状态
                 cat = frames["stand"]
             else:
-                import tts as _tts_mod
+                import typeoff.tts as _tts_mod
                 if _tts_mod.playing:                              # TTS 播报中：张嘴↔闭嘴
                     cat = frames["mouth" if int(now * 4) % 2 else "stand"]
                 elif busy:                                        # 调大模型/识别中：快速低头↔抬头
@@ -434,7 +433,7 @@ def run_overlay(state):
 
     def open_main():
         """拉起主界面（圆环右键菜单、托盘左键/菜单共用）。"""
-        import main_window
+        import typeoff.ui.main_window as main_window
         try:
             main_window.show(CONFIG_PATH, state["history_file"],
                              state["reminders_log"], state["import_trigger"], state["restart_trigger"])
@@ -444,8 +443,7 @@ def run_overlay(state):
     def show_menu():
         """小圆环右键菜单：只两项——主界面 / 退出程序（设置/历史/导入全收进主界面 tab）。
         Apple 风自绘弹窗（ui_style），后台线程跑 tkinter 不阻塞消息循环。"""
-        import ui_style
-
+        import typeoff.ui.style as ui_style
         items = [("主界面", open_main),
                  None,
                  ("退出程序", lambda: state.__setitem__("quit", True), "danger")]

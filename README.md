@@ -1,6 +1,6 @@
-# VoiceInputCN
+# Typeoff
 
-中文语音输入小工具。**说出唤醒词后直接说中文，自动转写并输入到当前光标处** —— 任何窗口都能用（Claude Code 终端、VS Code、浏览器等）。
+Windows 中文语音输入常驻程序。**说出唤醒词后直接说中文，自动转写并输入到当前光标处** —— 任何窗口都能用（Claude Code 终端、VS Code、浏览器等）。软件品牌 **Typeoff**，logo 是一只端坐的猫。
 
 它和 Claude Code 完全解耦：本质是一个"中文语音 → 键盘"的输入法级后台程序，而不是 Claude Code 的命令/插件。因为 Claude Code 内置的 `/voice` 暂不支持中文，所以用本地 [Qwen3-ASR](https://github.com/QwenLM/Qwen3-ASR) 自己做一个。
 
@@ -32,7 +32,7 @@ pip install -r requirements.txt
 > ⚠️ 若 PowerShell 报「无法加载脚本，因为在此系统上禁止运行脚本」，先执行一次
 > `Set-ExecutionPolicy -Scope CurrentUser RemoteSigned` 再激活。
 >
-> ⚠️ 不要在没激活 `.venv` 的情况下直接 `python voice_input.py`——`python` 可能指向其它
+> ⚠️ 不要在没激活 `.venv` 的情况下直接 `python -m typeoff.main`——`python` 可能指向其它
 > conda/系统环境（里面没装依赖），就会报 `ModuleNotFoundError: No module named 'sounddevice'`。
 
 转写引擎见下方 [转写引擎与 GPU 提速](#转写引擎与-gpu-提速)。默认/唯一推荐的 `qwen_gguf`（llama.cpp + Vulkan）需手动下载 GGUF 权重。
@@ -78,13 +78,13 @@ powershell -ExecutionPolicy Bypass -File start.ps1   # 起
 powershell -ExecutionPolicy Bypass -File stop.ps1    # 停
 ```
 
-已装了开机自启（见下节）时也可以：`Start-ScheduledTask -TaskName VoiceInputCN` / `Stop-ScheduledTask -TaskName VoiceInputCN`。
+已装了开机自启（见下节）时也可以：`Start-ScheduledTask -TaskName Typeoff` / `Stop-ScheduledTask -TaskName Typeoff`。
 
 前台调试（能看到实时输出）：
 
 ```powershell
 .\.venv\Scripts\Activate.ps1   # 先激活虚拟环境
-python voice_input.py
+python -m typeoff.main
 ```
 
 > ⚠️ 前台跑时**不要**用 `| Select-Object` 之类的管道，会把 stdout 变成 GBK 编码，程序里的 emoji `print` 会抛 `UnicodeEncodeError` 让后台线程崩掉（表现为"说话没反应"）。要看输出就直接跑，或用 `start.ps1` 走日志文件。
@@ -101,7 +101,7 @@ python voice_input.py
 - 距完整休眠**剩最后 1 分钟**才显示**倒计时数字**，进度环按这一分钟递减，≤10 秒转红提醒；
 - **右键**小圆环弹出菜单可退出程序，退出后才整体消失。
 
-> 实现：Pillow 超采样抗锯齿渲染 + Win32 分层窗口（逐像素 alpha），边缘平滑无锯齿。尺寸由 `voice_input.py` 顶部 `_OV_D` 控制（整体等比缩放）。
+> 实现：Pillow 超采样抗锯齿渲染 + Win32 分层窗口（逐像素 alpha），边缘平滑无锯齿。尺寸由 `typeoff/ui/overlay.py` 顶部 `_OV_D` 控制（整体等比缩放）。
 
 ### 聚焦当前窗口的输入框
 
@@ -145,7 +145,7 @@ python voice_input.py
 
 Qwen3-ASR 跑在 [llama.cpp](https://github.com/ggml-org/llama.cpp)（常驻 `llama-server`）上，GGUF 量化权重，**无需 PyTorch**。快、轻、冷启动短，还能把文本整理 LoRA 挂在同一个 server 上复用显存。GPU 加速走 **Vulkan**（老 N 卡/A 卡/核显都能加速，免 CUDA 版本地狱）。
 
-配好这几个字段即可（默认值见 `voice_input.py` 顶部 `DEFAULT_CONFIG`）：
+配好这几个字段即可（默认值见 `typeoff/config.py` 里的 `DEFAULT_CONFIG`）：
 
 ```jsonc
 "llama_server_exe": "llama-cpp/llama-server.exe",                              // Vulkan 版 llama-server

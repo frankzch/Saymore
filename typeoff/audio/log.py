@@ -16,7 +16,9 @@ from pathlib import Path
 
 import numpy as np
 
-ROOT = Path(__file__).parent / "logs" / "audio"
+from typeoff.paths import PROJECT_ROOT
+
+ROOT = PROJECT_ROOT / "logs" / "audio"
 
 
 def save(audio, sr, text, conf=None):

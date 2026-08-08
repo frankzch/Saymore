@@ -12,8 +12,10 @@ import re
 from datetime import datetime, timedelta
 from pathlib import Path
 
+from typeoff.paths import PROJECT_ROOT
+
 _WEEKDAY = ["周一", "周二", "周三", "周四", "周五", "周六", "周日"]
-_PROMPT_FILE = Path(__file__).parent / "finetune" / "reminder_prompt.txt"
+_PROMPT_FILE = PROJECT_ROOT / "finetune" / "reminder_prompt.txt"
 
 
 def _anchors(now):
@@ -97,7 +99,7 @@ def handle(store, history, user_text, llm_cfg, chat_fn):
 def _selfcheck():
     import tempfile, os, shutil
     from collections import deque
-    from reminders import Reminders
+    from typeoff.reminder.store import Reminders
     p = os.path.join(tempfile.gettempdir(), "reminder_chat_selftest.json")
     d = os.path.splitext(p)[0]
     if os.path.exists(p):

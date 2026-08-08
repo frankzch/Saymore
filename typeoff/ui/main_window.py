@@ -13,11 +13,9 @@ import subprocess
 import sys
 from pathlib import Path
 
-import settings_window
-import history_view
-import mic_probe
-
-
+import typeoff.ui.settings as settings_window
+import typeoff.ui.history as history_view
+import typeoff.audio.mic_probe as mic_probe
 def _build_html(cfg, cfg_dir, history_dir, reminders_log, tab):
     payload = {
         "settings": settings_window.settings_data(cfg, cfg_dir),
@@ -166,7 +164,8 @@ def _run_gui(config_path, history_dir, reminders_log, import_trigger, restart_tr
         return False
     win.events.closing += _on_closing
 
-    ico = Path(__file__).parent / "typeoff.ico"
+    from typeoff.paths import PROJECT_ROOT
+    ico = PROJECT_ROOT / "typeoff.ico"
     webview.start(icon=str(ico) if ico.exists() else None)
 
 

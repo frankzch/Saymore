@@ -1,8 +1,10 @@
-"""中文语音输入工具 —— 常驻后台，说出唤醒词后边说边转写并输入到当前焦点窗口，静默自动休眠。
+"""Typeoff 主程序 —— 常驻后台，说出唤醒词后边说边转写并输入到当前焦点窗口，静默自动休眠。
 
-引擎: Qwen3-ASR (本地, llama.cpp/Vulkan, 见 asr_llamacpp.py)
+引擎: Qwen3-ASR (本地, llama.cpp/Vulkan, 见 typeoff/asr/llamacpp.py)
 输出: 转写文本经剪贴板 + Ctrl+V 粘贴到光标处（对中文/Unicode 最可靠）
 平台: Windows
+
+入口: python -m typeoff.main（一般由 start.ps1 拉起）
 """
 
 import json
@@ -25,82 +27,19 @@ try:
 except ImportError:
     opencc = None
 
-import tts
-import panel
-import ui_style
-from hotwords import HotWords
-from screen_context import ScreenContext, assemble_context, make_llm_extractor
-from reminder_mode import ReminderMode
-from win_focus import output_text, focus_window, click_permission_button
-from overlay import run_overlay
-from paths import CONFIG_PATH, _resolve
-from audio_capture import Recorder, build_vad, build_keyword_spotter
+import typeoff.tts as tts
+import typeoff.ui.panel as panel
+import typeoff.ui.style as ui_style
+from typeoff.config import (DEFAULT_CONFIG, SENTENCE_END, JA_KO_RE,
+                             load_config, load_replacements, apply_replacements)
+from typeoff.paths import CONFIG_PATH, _resolve
+from typeoff.hotwords.learn import HotWords
+from typeoff.hotwords.screen import ScreenContext, assemble_context, make_llm_extractor
+from typeoff.reminder.mode import ReminderMode
+from typeoff.win.focus import output_text, focus_window, click_permission_button
+from typeoff.ui.overlay import run_overlay
+from typeoff.audio.capture import Recorder, build_vad, build_keyword_spotter
 
-
-DEFAULT_CONFIG = {
-    "wake_words": ["小美"],   # 唤醒词（可多个）；说中其一即进入聆听状态。改成你想要的，建议 3-4 字且不常用
-    "sleep_after_seconds": 300,  # 唤醒后静默超过此秒数（默认 5 分钟）进入完整休眠：回到待唤醒并卸载模型释放内存/显存。最后 60s 悬浮窗显示倒计时
-    "kws_model_dir": "kws-model",       # sherpa-onnx KWS 模型目录（解压 release 得到，含 *.onnx + tokens.txt）
-    "kws_tokens_type": "phone+ppinyin", # 关键词转 token 方式：中英混合模型用 phone+ppinyin；纯中文 wenetspeech 模型用 ppinyin
-    "kws_threshold": 0.18,           # 唤醒灵敏度，越小越易触发（也越易误触）；默认 0.25
-    "llama_server_exe": "llama-cpp/llama-server.exe",  # llama.cpp 预编译 Vulkan 版 llama-server 路径
-    "gguf_model": "models/Qwen3-ASR-1.7B-GGUF/Qwen3-ASR-1.7B-IQ4_NL.gguf",       # qwen_gguf: 主模型(LLM 解码器)；IQ4_NL(NormalFloat4，匹配训练 nf4 网格)较 Q4_K_M 提回提醒时间算术，见 ROUNDS.md K1；回滚改回 Q4_K_M 文件即可
-    "gguf_mmproj": "models/Qwen3-ASR-1.7B-GGUF/mmproj-Qwen3-ASR-1.7B-Q8_0.gguf", # qwen_gguf: 音频编码器
-    "llama_port": 8901,          # qwen_gguf: llama-server 本地端口
-    "asr_min_confidence": 0.6,   # 置信度(生成 token 平均概率 0..1)低于此值视为没听清，播提示语丢弃不上屏；0=不启用。每句置信度都会打日志，据此调阈值
-    "asr_zh_en_only": True,      # 只说中英文：丢弃误识别成日文假名/韩文的整句（绝不粘出日韩文）
-    "language": "Chinese", # 识别语言（Qwen 用英文语言名；留空/None=自动检测）
-    "device": "auto",        # auto=启动时探测 vulkan-1.dll，有则用 GPU，无则回退 CPU；也可显式填 cuda / cpu。GPU 用 -ngl 99，CPU 慢约 2 倍（实测见 asr_eval）
-    "sample_rate": 16000,        # 输入采样率（Qwen3-ASR 内部按 16kHz 处理）
-    "input_device": "",          # 麦克风：""=系统默认；否则填 sounddevice 里的设备名（设置面板下拉选完直接落盘）。找不到匹配的会回退默认+打 warn
-    "vad_model": "silero_vad.onnx",  # Silero VAD v5 模型路径（相对脚本目录或绝对）。存在则用 sherpa-onnx VoiceActivityDetector 高级接口切句（内置平滑，抗抖动）；不存在则回退到 RMS
-    "vad_threshold": 0.5,        # Silero VAD 概率阈值：>此值视为人声。0.5 是官方默认；调高更保守（漏轻声），调低更灵敏（易把噪声当人声）
-    "silence_rms": 0.015,     # 回退方案：VAD 模型缺失时用的 RMS 静音阈值（float32 振幅），低于此视为静音
-    "silence_seconds": 0.5,      # 连续静音超过此时长即切一句，丢给后台转写（越大越能容忍说话中的短停顿，避免碎句）
-    "min_segment_seconds": 0.15, # 一句短于此时长视为误触/碎句，丢弃。别设太大——"继续"/"发送"这类 2 字词只有 250~350ms，>=0.4 会把它们整个丢掉
-    "max_segment_seconds": 15.0, # 一句超过此时长即强制切句
-    "min_speech_peak": 0.08,     # 整段峰值低于此值判为背景噪音，直接跳过不识别（说话峰值一般 0.2+）
-    "paste": True,               # True=自动粘贴; False=仅复制到剪贴板
-    "simplified": True,          # True=用 OpenCC 把繁体统一转成简体
-    "append_period": True,       # True=句末无结束标点时自动补一个句号
-    "local_cleanup": True,       # True=回填前把攒的话过本地整理模型：走 llama-server+整理 LoRA(GPU 亚秒级，与转写同进程)；见 finetune/ROUNDS.md I1
-    "cleanup_mode": "小范围整理",  # 默认整理模式：小范围整理/深度整理/邮件整理/00后整理
-    "cleanup_quiet_seconds": 10.0,  # 停止说话后等多久自动触发整理(秒)
-    "cleanup_min_confidence": 0.6,  # 整理置信度(同 ASR 的 exp(平均 logprob) 定义)低于此值：面板里该段标红提示用户复核，不丢弃/不阻断回填
-    "panel_low_conf_rgb": ui_style.PANEL_LOW_CONF_RGB,  # 整理置信度偏低：红色（真正的错误态，跟"未整理"的中性灰绿区分）
-    "cleanup_context_chars": 80,      # 小范围整理的活跃窗上限(字)：只重整理最近这么多字+新句，滚出的整句冻结不再重跑——封住每轮整理的输入长度，避免说到几千字时成本平方级
-    "hear_cue_min_gap": 3.0,     # 每识别一句回一声"嗯/好"的最小间隔(秒)：距上一声不够久就跳过这句的反馈，免得说话密时反馈过密
-    "save_audio": True,          # True=留存语音 wav+转写结果到 logs/audio/（≈1.9MB/分钟）给端到端微调攒同分布数据；只在真正说"发送"时把缓存整批落盘，"输入"不回车/回退/进休眠都丢弃，不留噪音。见 audio_log.py
-    "panel": True,               # True=识别句先进右下角半透明玻璃面板缓冲，可语音纠正后再整理回填输入框；False=每句立刻粘贴（旧行为）。缓存只有说"发送"才整体回填，攒多少字、静默多久、进休眠都不自动回填
-    # 磨砂面板外观：默认值统一取自 ui_style 主题（Apple 浅灰底 + 系统绿三档），配置可覆盖。
-    # tint 为 AARRGGBB：A 越小越透（统一 alpha 会连带文字变淡，别调太小）
-    "panel_tint": ui_style.PANEL_TINT,
-    "panel_text_rgb": ui_style.PANEL_TEXT_RGB,        # 已整理：绿色（表示整理完成）
-    "panel_raw_text_rgb": ui_style.PANEL_RAW_TEXT_RGB,  # 未整理：黑色（原始转写）
-    "panel_hint_text_rgb": ui_style.PANEL_HINT_TEXT_RGB,  # 状态提示（正在说话/识别中）：最淡
-    "panel_font_px": 13,         # 面板字号(px)：字形跟系统对话框一致，字号在此调（系统默认 12 偏小、20 偏大）
-    "panel_max_h": 240,       # 面板最大高度(px)：文字向上撑到这个高度就不再涨，改显示滚动条+最新内容
-    "overlay": True,             # True=屏幕显示录音状态小圆点（绿=聆听 / 红+数字=即将休眠；右键可退出）
-    "overlay_pos": None,         # 小圆窗左上角屏幕坐标 [x,y]；拖动后记住位置，None=按屏幕右下角默认摆放
-    "replacements_file": "replacements.json",  # 转写后做"错→对"替换（含大小写纠正），文件不存在则跳过
-    # 无云端 LLM 配置：转写/四种整理/屏幕提词/历史热词全部走本地 llama-server + 多 LoRA
-    "qwen_context_file": "ai_terms.txt",  # 把此文件内容（一行一词的术语表）作为 context 喂给模型做上下文偏置（专有名词/常用词更准）；文件不存在则不偏置
-    "bias_max_terms": 80,        # 长段偏置词表总上限（不含命令词，命令词始终全进）；过长会稀释注意力+拖慢推理。优先级：命令词>屏幕热词>静态术语>历史热词，填满即止
-    "screen_bias_max_terms": 10,  # 屏幕热词份额硬上限：屏幕虽最相关但噪声也大，压低不让它挤走术语/历史
-    "static_bias_max_terms": 30,  # 静态术语（qwen_context_file）份额硬上限；历史热词无 cap，吃剩余到 bias_total（含静态没填满和跨组去重省下的名额）
-    "focus_window_title": "",  # 留空=通用：一律在当前前台窗口自动找输入框（不再切换窗口）。填进程名或标题关键字才对该目标用下面的名字精确定位
-    "focus_input_name": "",    # 留空=通用。仅当前台命中 focus_window_title 时，才用 UIA 把焦点精确定位到此名字的输入控件（如 Claude 桌面端输入框名为 Prompt）
-    "send_words": ["发送", "提交"],  # 整句只说这些词之一时，不打字而是切回窗口回填/回车提交
-    "auto_enter": True,  # 发送时是否自动按回车提交；关闭则只回填文字，不按回车（部分场合不需要直接提交）
-    "confirm_words": ["弹框确认", "确认弹框"],  # 整句只说这些词之一时，点掉 CC 的确认弹框：有"总是允许"(always)就点它，否则点"允许一次"(allow)
-    "undo_words": ["回退", "撤销"],  # 整句只说这些词之一时，删除上一句刚输入的文本（按字符数退格）
-    "clear_words": ["清空", "清空重来"],  # 整句只说这些词之一时，丢弃面板缓存里攒的全部文字（不发送、不回填、不写历史/热词/音频），重新说
-    "cleanup_words": ["文本整理", "立即整理"],  # 整句只说这些词之一时，不等停顿倒计时，立即按当前整理模式整理面板文字
-    "sleep_words": ["休眠", "睡觉"],  # 整句只说这些词之一时，立即进入完整休眠（卸载模型）
-    "quit_words": ["退出", "关闭程序"],  # 整句只说这些词之一时，弹确认框，确认后退出程序
-}
-
-SENTENCE_END = "。！？.!?…~"     # 已以这些标点结尾则不再补句号
 
 # 提醒模式下每收一句的简短人声应答（轮换，听着自然），替代听写模式的猫叫
 _REMINDER_CUES = ["嗯", "好的", "嗯哼", "好"]
@@ -112,68 +51,18 @@ _CMD_ACK_CUES = ["好的", "收到"]
 # 每识别出一句普通听写句的即时应答（随机选一个，短，别等整理好——整理太慢）
 _HEAR_CUES = ["嗯", "好"]
 
-# 日文假名 + 韩文谚文（含 Jamo）。只说中英文时，命中即视为误识别整句丢弃。
-JA_KO_RE = re.compile(r"[぀-ヿ가-힣ᄀ-ᇿ㄰-㆏]")
-
-
-def load_config():
-    """DEFAULT_CONFIG 是"种子":首次或新增项时给默认值。启动即把缺失项补写进 config.json，
-    让它成为完整的单一配置真源——设置窗口直接读 config.json 就所见即所得，无需再合并默认。
-    用户已改的键原样保留（cfg.update 覆盖在后），只补没有的。"""
-    cfg = dict(DEFAULT_CONFIG)
-    on_disk = {}
-    if CONFIG_PATH.exists():
-        try:
-            on_disk = json.loads(CONFIG_PATH.read_text(encoding="utf-8"))
-            cfg.update(on_disk)
-        except Exception as e:
-            print(f"[warn] 读取 config.json 失败，使用默认配置: {e}")
-            return cfg  # 文件坏了别拿默认覆盖它，留着让用户/power user 自己修
-    if cfg != on_disk:  # 有缺失的默认项 → 补写回盘（用户值已在 cfg 里保留）
-        CONFIG_PATH.write_text(json.dumps(cfg, ensure_ascii=False, indent=2), encoding="utf-8")
-    return cfg
-
-
-def load_replacements(filename):
-    """读取 错→对 替换表（JSON 对象）。文件不存在返回空表。"""
-    if not filename:
-        return {}
-    path = _resolve(filename)
-    if not path.exists():
-        return {}
-    try:
-        data = json.loads(path.read_text(encoding="utf-8"))
-        if isinstance(data, dict):
-            print(f"[info] 已加载 {len(data)} 条替换规则")
-            return {str(k): str(v) for k, v in data.items()}
-    except Exception as e:
-        print(f"[warn] 读取替换表失败，已跳过: {e}")
-    return {}
-
-
-def apply_replacements(text, replacements):
-    """应用替换。纯 ASCII 的键按词边界、忽略大小写替换（用于大小写纠正，
-    如 llm/Llm/LLM -> LLM）；含中文等非 ASCII 的键按原样直接替换。"""
-    for wrong, right in replacements.items():
-        if wrong.isascii():
-            pat = r"(?<![A-Za-z0-9])" + re.escape(wrong) + r"(?![A-Za-z0-9])"
-            text = re.sub(pat, right, text, flags=re.IGNORECASE)
-        else:
-            text = text.replace(wrong, right)
-    return text
-
 
 def main():
     # pythonw.exe（后台无控制台）下 stdout/stderr 为 None，任何 print 都会崩溃；
     # 重定向到按日切分的日志：logs/voice_input-YYYY-MM-DD.log，每行自动贴 HH:MM:SS.mmm
     # ——现有 print() 免改就带时间戳，便于事后定位哪一步慢。
     if sys.stdout is None or sys.stderr is None:
-        from log_setup import install
+        from typeoff.log_setup import install
         install(CONFIG_PATH.parent / "logs")
         print(f"===== 启动 =====")
 
     if os.name == "nt":  # 必须在本进程建任何窗口之前调用，否则托盘 toast 通知显示来源会是"Python"
-        import tray
+        import typeoff.ui.tray as tray
         tray.register_app_identity(CONFIG_PATH.parent / "typeoff.ico")
 
     ready_marker = CONFIG_PATH.parent / ".ready"  # 存在=后台已在监听；悬浮窗/主界面靠它判断是否还在初始化
@@ -219,16 +108,16 @@ def main():
 
     if first_run:  # 装完第一次打开：自动拉起主界面，别让用户对着空桌面找不到入口
         print("[info] 首次启动，自动打开主界面。")
-        import main_window
+        import typeoff.ui.main_window as main_window
         main_window.show(CONFIG_PATH, state["history_file"], state["reminders_log"],
                          state["import_trigger"], state["restart_trigger"])
 
     # llama.cpp 后端：llama-server 常驻本地(Vulkan GPU)，HTTP 转写，见 asr_llamacpp.py
-    from asr_llamacpp import LlamaASR
+    from typeoff.asr.llamacpp import LlamaASR
     # 整理 LoRA：合一 multi LoRA 挂给 llama-server——一个进程内 转写 + 四风格整理
     # （保守/深度/邮件/00后 同一 adapter，靠 system 切人格；finetune/ROUNDS.md multi 轮）。
     _loras = {}
-    import local_cleanup as _lc  # find_gguf 只做 gguf 定位
+    import typeoff.cleanup.local as _lc  # find_gguf 只做 gguf 定位
     _want = []
     if cfg.get("local_cleanup"):
         if _lc.find_gguf("multi-lora.gguf"):
@@ -446,7 +335,7 @@ def main():
 
     def confirm_quit():
         """弹出 确认/取消 对话框，确认后置 quit 让主循环退出。阻塞当前 worker 线程，无妨。"""
-        import ui_style
+        import typeoff.ui.style as ui_style
         if ui_style.confirm("退出确认", "确认退出语音输入？", ok="退出", danger=True):
             state["quit"] = True
             print("[done] 用户确认退出")
@@ -463,7 +352,7 @@ def main():
             n_list[:] = [0] * len(n_list)
         if not pa:
             return
-        import audio_log
+        import typeoff.audio.log as audio_log
         for a, sr, t, c in pa:
             audio_log.save(a, sr, t, c)
 
@@ -529,7 +418,7 @@ def main():
         core = text.strip()
         if len(core) < 5 and not any(c in core for c in "，。！？、,.!?;；：:"):
             return text, None
-        import local_cleanup  # 取该 mode 的提示词（训推一致：合一 LoRA 靠 system 切人格）
+        import typeoff.cleanup.local as local_cleanup  # 取该 mode 的提示词（训推一致：合一 LoRA 靠 system 切人格）
         # 合一 multi 挂着就恒走它（四风格同一 adapter）；回滚到老双人格时才按 mode 分 deep/basic。
         role = "multi" if "multi" in llama_asr.loras else ("deep" if mode == "深度整理" else "basic")
         try:
@@ -870,8 +759,8 @@ def main():
                 if trigger.exists():
                     trigger.unlink(missing_ok=True)
                     print("[info] 设置窗口请求重启，拉起新进程接班…")
-                    subprocess.Popen([sys.executable, str(Path(__file__).resolve())],
-                                     cwd=str(Path(__file__).resolve().parent))
+                    subprocess.Popen([sys.executable, "-m", "typeoff.main"],
+                                     cwd=str(CONFIG_PATH.parent))
                     state["quit"] = True
             except Exception as e:  # noqa: BLE001 监视线程别被单次异常杀死
                 print(f"[warn] 重启触发处理出错：{e}")

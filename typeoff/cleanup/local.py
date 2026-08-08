@@ -7,8 +7,9 @@
 """
 from pathlib import Path
 
+from typeoff.paths import PROJECT_ROOT
 
-_LORA_DIR = Path(__file__).parent / "cleanup_lora"
+_LORA_DIR = PROJECT_ROOT / "cleanup_lora"
 
 
 def find_gguf(name):
