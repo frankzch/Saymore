@@ -56,6 +56,9 @@ PLAN-panel-and-features.md
 # 迁至 polish_lora/ 的独立副本；根目录旧文件不再入库（避免与 polish_lora/ 内的重复）
 deep_prompt.txt
 
+# 上线新 LoRA 时留下的本地回滚备份（.multi_v1.bak / .multi_v2.bak 等），不入公开库
+polish_lora/*.bak
+
 # Claude Code / 各类 AI 助手本地状态
 .claude/
 
