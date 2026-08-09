@@ -16,6 +16,7 @@ from pathlib import Path
 import typeoff.ui.settings as settings_window
 import typeoff.ui.history as history_view
 import typeoff.audio.mic_probe as mic_probe
+import typeoff.win.autostart as autostart
 def _build_html(cfg, cfg_dir, history_dir, reminders_log, tab):
     payload = {
         "settings": settings_window.settings_data(cfg, cfg_dir),
@@ -46,11 +47,15 @@ class _Api:
     def save(self, payload):
         try:
             settings_window.save(self._cfg, payload)
-            return {"ok": True, "msg": "已保存"}
         except ValueError:
             return {"ok": False, "msg": "格式不合法，未保存"}
         except Exception as e:  # noqa: BLE001 兜底，别让保存把窗口搞崩
             return {"ok": False, "msg": f"保存失败：{e}"}
+        # autostart 是系统级副作用：写完 config 后同步注册/卸载任务计划
+        if payload and "autostart" in payload:
+            ok, msg = autostart.set_enabled(bool(payload["autostart"]))
+            return {"ok": ok, "msg": msg}
+        return {"ok": True, "msg": "已保存"}
 
     def pick_import(self):
         """弹原生选文件框选中路径 → 写触发文件，交给语音进程跑导入（本进程不碰模型/TTS）。"""
@@ -149,6 +154,9 @@ def _run_gui(config_path, history_dir, reminders_log, import_trigger, restart_tr
 
     cfg = json.loads(Path(config_path).read_text(encoding="utf-8"))
     cfg_dir = Path(config_path).parent
+    # 开机自启的真源是系统的任务计划：以它为准覆盖 config 的值，避免用户手动 schtasks
+    # 删掉任务后界面还显示"开"
+    cfg["autostart"] = autostart.is_enabled()
     api = _Api(config_path, import_trigger, restart_trigger, history_dir, reminders_log)
     win = webview.create_window(_WIN_TITLE, html=_build_html(cfg, cfg_dir, history_dir, reminders_log, tab),
                                 js_api=api, width=900, height=660, min_size=(720, 500),
@@ -194,10 +202,12 @@ def show(config_path, history_dir, reminders_log, import_trigger, restart_trigge
     已开着一个就前置复用它，不再叠开新窗口。"""
     if _focus_existing():
         return
-    kw = {}
+    kw = {"cwd": str(Path(__file__).resolve().parent.parent.parent)}
     if os.name == "nt":
         kw["creationflags"] = 0x08000000  # CREATE_NO_WINDOW：别闪出控制台
-    subprocess.Popen([sys.executable, os.path.abspath(__file__), str(config_path),
+    # 用 -m 而不是脚本路径：脚本路径会把 typeoff/ui/ 塞进 sys.path[0]，
+    # 里面的 `import typeoff.ui.settings` 就找不到顶级 typeoff 包（迁包后遗症）
+    subprocess.Popen([sys.executable, "-m", "typeoff.ui.main_window", str(config_path),
                       str(history_dir), str(reminders_log), str(import_trigger),
                       str(restart_trigger), tab], **kw)
 
@@ -434,7 +444,7 @@ const ps = document.getElementById('p-settings');
 /* 命令词：每词一个小方块（右上角叉删除）+ 末尾「+」方块（点它就地展开输入框，回车加词） */
 const chipState = {};  // key -> {label, words}，关窗前查一遍别让哪类指令词被删光
 const originalValues = {};  // key -> 打开设置窗口时的原值，用于判断改回原值后是否还需要重启
-const noRestartKeys = new Set();  // wordlist 等实时生效的键，跳过重启提示（必须先声明，buildWordlist 用得到）
+const noRestartKeys = new Set(['autostart']);  // wordlist 等实时生效的键，跳过重启提示（必须先声明，buildWordlist 用得到）
 function buildChips(row, f) {
   const single = !!(f.options && f.options.single);  // 唤醒词等：只保留一个方块，加新词即替换
   const words = (f.value || []).slice();
