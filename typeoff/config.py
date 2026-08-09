@@ -19,7 +19,7 @@ DEFAULT_CONFIG = {
     "kws_tokens_type": "phone+ppinyin", # 关键词转 token 方式：中英混合模型用 phone+ppinyin；纯中文 wenetspeech 模型用 ppinyin
     "kws_threshold": 0.18,           # 唤醒灵敏度，越小越易触发（也越易误触）；默认 0.25
     "llama_server_exe": "llama-cpp/llama-server.exe",  # llama.cpp 预编译 Vulkan 版 llama-server 路径
-    "gguf_model": "models/Qwen3-ASR-1.7B-GGUF/Qwen3-ASR-1.7B-IQ4_NL.gguf",       # qwen_gguf: 主模型(LLM 解码器)；IQ4_NL(NormalFloat4，匹配训练 nf4 网格)较 Q4_K_M 提回提醒时间算术；回滚改回 Q4_K_M 文件即可
+    "gguf_model": "models/Qwen3-ASR-1.7B-GGUF/Qwen3-ASR-1.7B-IQ4_NL.gguf",       # qwen_gguf: 主模型(LLM 解码器)。IQ4_NL(NormalFloat4)与训练 QLoRA nf4 码本对齐,训推一致
     "gguf_mmproj": "models/Qwen3-ASR-1.7B-GGUF/mmproj-Qwen3-ASR-1.7B-Q8_0.gguf", # qwen_gguf: 音频编码器
     "llama_port": 8901,          # qwen_gguf: llama-server 本地端口
     "asr_min_confidence": 0.6,   # 置信度(生成 token 平均概率 0..1)低于此值视为没听清，播提示语丢弃不上屏；0=不启用
