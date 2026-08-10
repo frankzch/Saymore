@@ -8,7 +8,47 @@
 - assets 走 datas=[]：图标、猫帧 PNG、KWS/LoRA/VAD/llama.cpp 全部整目录搬过去。
 - hidden imports：sherpa_onnx / rapidocr_onnxruntime / edge_tts / webview 等含子模块动态导入。
 """
+import os, sys, glob
 from PyInstaller.utils.hooks import collect_data_files, collect_submodules
+
+# Anaconda 的 stdlib .pyd（_ctypes / _ssl / _hashlib / _bz2 / _lzma / _tkinter …）依赖的
+# 一堆 DLL 躺在 <env>\Library\bin\ 下（非标准 DLLs 目录,PyInstaller 默认不扫）。不显式收
+# 就会在目标机报 "ImportError: DLL load failed"（_ctypes 最先炸,后面 ssl/hashlib 更致命）。
+# 这里扫 <base_prefix>\DLLs 里所有 .pyd 的 IAT,凡是它们 import、且能在 Library\bin 里找到
+# 的 DLL 全部搬进根目录。递归解析,避免链式漏收。
+_extra_bins = []
+_conda_bin = os.path.join(sys.base_prefix, 'Library', 'bin')
+if os.path.isdir(_conda_bin):
+    try:
+        import pefile
+        _bin_map = {f.lower(): os.path.join(_conda_bin, f)
+                    for f in os.listdir(_conda_bin) if f.lower().endswith('.dll')}
+        _seen = set()
+        def _scan(fp):
+            try:
+                pe = pefile.PE(fp, fast_load=True)
+                pe.parse_data_directories(directories=[
+                    pefile.DIRECTORY_ENTRY['IMAGE_DIRECTORY_ENTRY_IMPORT']])
+                if hasattr(pe, 'DIRECTORY_ENTRY_IMPORT'):
+                    for entry in pe.DIRECTORY_ENTRY_IMPORT:
+                        dep = entry.dll.decode(errors='ignore').lower()
+                        if dep in _bin_map and dep not in _seen:
+                            _seen.add(dep)
+                            src = _bin_map[dep]
+                            _extra_bins.append((src, '.'))
+                            _scan(src)  # 递归收 DLL 的依赖
+                pe.close()
+            except Exception:
+                pass
+        _dlls_dir = os.path.join(sys.base_prefix, 'DLLs')
+        if os.path.isdir(_dlls_dir):
+            for _pyd in glob.glob(os.path.join(_dlls_dir, '*.pyd')):
+                _scan(_pyd)
+        print(f'[saymore.spec] 从 Anaconda Library\\bin 收 {len(_extra_bins)} 个 DLL: '
+              f'{sorted(n for n,_ in ((os.path.basename(s),d) for s,d in _extra_bins))}')
+    except ImportError:
+        print('[saymore.spec] 警告: pefile 未装,无法自动扫 Anaconda DLL 依赖。'
+              'pip install pefile 后重打,否则 _ctypes/_ssl 等 stdlib 会加载失败。')
 
 hidden = []
 hidden += collect_submodules('sherpa_onnx')
@@ -41,7 +81,7 @@ datas += [
 a = Analysis(
     ['run_saymore.py'],
     pathex=['.'],
-    binaries=[],
+    binaries=_extra_bins,
     datas=datas,
     hiddenimports=hidden,
     hookspath=[],
