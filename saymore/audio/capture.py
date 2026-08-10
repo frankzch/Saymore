@@ -5,6 +5,7 @@ build_vad 造 Silero VAD、build_keyword_spotter 造 sherpa-onnx KWS 唤醒器�
 从 voice_input.py 拆出——参数由主程序传入，路径解析复用 paths._resolve。
 """
 import re
+import sys
 
 import numpy as np
 import sounddevice as sd

@@ -56,6 +56,9 @@ hidden += collect_submodules('rapidocr_onnxruntime')
 hidden += collect_submodules('webview')
 hidden += collect_submodules('edge_tts')
 hidden += collect_submodules('opencc')
+# sherpa_onnx.cli 用 click 做子命令(text2token 生成唤醒词 tokens 文件)。
+# 不显式收会打不进去,用户改唤醒词时静默失败(旧 keywords.txt 沿用、新词永远不生效)。
+hidden += collect_submodules('click')
 # comtypes 动态生成 gen 模块（SAPI），常规静态分析看不到
 hidden += ['comtypes', 'comtypes.client', 'comtypes.gen']
 
@@ -66,16 +69,16 @@ datas += collect_data_files('rapidocr_onnxruntime')
 datas += collect_data_files('opencc')
 datas += collect_data_files('webview')
 
-# 项目自带资源（相对路径 → 打包后 dist/Saymore/ 下同名目录）
+# 项目自带资源。**只**留 Python 代码内引用的资源(猫帧 PNG、图标),这些必须
+# 和 saymore/ 一起进 _internal 才能通过包相对路径找到。
+# 用户可见的大件(kws-model / polish_lora / llama-cpp / silero_vad.onnx /
+# config.json / terms.txt)由 Inno Setup 直接从仓库拷到 {app}\,不走 PyInstaller。
+# 见 saymore/paths.py: 打包后 PROJECT_ROOT = Saymore.exe 所在目录。
 datas += [
     ('saymore/ui/assets', 'saymore/ui/assets'),  # 猫姿势 PNG
-    ('kws-model',         'kws-model'),          # 命令词唤醒模型
-    ('polish_lora',       'polish_lora'),        # 整理 LoRA + prompt
-    ('llama-cpp',         'llama-cpp'),          # 推理引擎（含 Vulkan）
-    ('silero_vad.onnx',   '.'),                  # 端点检测
-    ('saymore.ico',       '.'),
-    ('config.json',       '.'),                  # 默认配置模板；用户改动写就地
-    ('terms.txt',         '.'),                  # 静态术语表种子
+    # saymore.ico 不进 _internal：Inno 会把它拷到 {app}\ 根,运行时按
+    # PROJECT_ROOT/saymore.ico 加载(托盘/圆环/主窗)。EXE 本身的图标已通过下面
+    # EXE(icon='saymore.ico') 静态嵌入,不依赖此 datas 项。
 ]
 
 a = Analysis(

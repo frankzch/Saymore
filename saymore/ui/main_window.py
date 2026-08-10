@@ -238,6 +238,27 @@ def _run_gui(config_path, history_dir, reminders_log, import_trigger, restart_tr
         return False
     win.events.closing += _on_closing
 
+    def _bring_to_front():
+        """把主窗强制拽到最前:pywebview 默认按普通新窗口起,常被浏览器/编辑器盖住。
+        SW_RESTORE 处理最小化;topmost 脉冲一下(设 TOPMOST 再取消)绕过 Windows 的
+        SetForegroundWindow 抢焦点保护;最后再 SetForegroundWindow 定焦。"""
+        if os.name != "nt":
+            return
+        try:
+            import ctypes
+            user32 = ctypes.windll.user32
+            hwnd = user32.FindWindowW(None, _WIN_TITLE)
+            if not hwnd:
+                return
+            user32.ShowWindow(hwnd, 9)  # SW_RESTORE
+            # HWND_TOPMOST=-1, HWND_NOTOPMOST=-2, SWP_NOMOVE|SWP_NOSIZE|SWP_NOACTIVATE=0x13
+            user32.SetWindowPos(hwnd, -1, 0, 0, 0, 0, 0x13)
+            user32.SetWindowPos(hwnd, -2, 0, 0, 0, 0, 0x13)
+            user32.SetForegroundWindow(hwnd)
+        except Exception as e:
+            print(f"[warn] 主窗前置失败: {e}")
+    win.events.shown += _bring_to_front
+
     from saymore.paths import PROJECT_ROOT
     ico = PROJECT_ROOT / "saymore.ico"
     webview.start(icon=str(ico) if ico.exists() else None)
@@ -257,6 +278,9 @@ def _focus_existing():
         if not hwnd:
             return False
         user32.ShowWindow(hwnd, 9)      # SW_RESTORE：最小化过就复原
+        # topmost 脉冲绕过 Windows 抢焦点保护,同 _bring_to_front
+        user32.SetWindowPos(hwnd, -1, 0, 0, 0, 0, 0x13)
+        user32.SetWindowPos(hwnd, -2, 0, 0, 0, 0, 0x13)
         user32.SetForegroundWindow(hwnd)
         return True
     except Exception:

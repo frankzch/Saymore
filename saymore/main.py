@@ -96,7 +96,19 @@ def main():
     ready_marker = CONFIG_PATH.parent / ".ready"  # 存在=后台已在监听；悬浮窗/主界面靠它判断是否还在初始化
     ready_marker.unlink(missing_ok=True)
 
-    first_run = not CONFIG_PATH.exists()  # 装完后从没生成过配置文件 = 第一次打开
+    # 头两次启动自动弹主窗:第 1 次(装完)引导用户;第 2 次是"下载完模型后自我重启"
+    # 那一趟(见后面 restart_trigger),第 1 次的窗口会随着下载完自动关掉,得再弹一次
+    # 让用户知道已就绪。之后就不再自动弹,由用户主动从托盘/圆环唤起。
+    launch_marker = CONFIG_PATH.parent / ".launch_count"
+    try:
+        _launch_n = int(launch_marker.read_text(encoding="utf-8").strip() or "0")
+    except (OSError, ValueError):
+        _launch_n = 0
+    first_run = _launch_n < 2
+    try:
+        launch_marker.write_text(str(_launch_n + 1), encoding="utf-8")
+    except OSError as e:
+        print(f"[warn] 写 .launch_count 失败(不影响运行): {e}")
     cfg = load_config()
 
     # 运行环境检测：任一必需组件缺失（模型未下载/安装包被破坏）就不启动语音后端，
