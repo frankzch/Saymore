@@ -2,12 +2,12 @@
 """大文件下载器：分块 + 断点续传 + 多源回退 + 进度回调。
 
 用法（同步）:
-    from typeoff.downloader import download
+    from saymore.downloader import download
     download(urls=["url1", "url2"], dest=Path("..."),
              on_progress=lambda done,total,rate: ..., cancel_flag=lambda: False)
 
 用法（异步 + 供 UI 轮询）:
-    from typeoff.downloader import start, progress, cancel
+    from saymore.downloader import start, progress, cancel
     start("asr_gguf", urls=[...], dest=Path("..."))
     ... UI poll ...
     p = progress("asr_gguf")   # {state, done, total, rate, msg}
@@ -64,7 +64,7 @@ def _try_single_url(url: str, dest: Path, on_progress: Callable[[int, int, float
     part = dest.with_suffix(dest.suffix + ".part")
     offset = part.stat().st_size if part.exists() else 0
 
-    headers = {"User-Agent": "Typeoff/1.0"}
+    headers = {"User-Agent": "Saymore/1.0"}
     if offset > 0:
         headers["Range"] = f"bytes={offset}-"
 

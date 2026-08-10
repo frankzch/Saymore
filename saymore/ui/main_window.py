@@ -13,11 +13,11 @@ import subprocess
 import sys
 from pathlib import Path
 
-import typeoff.ui.settings as settings_window
-import typeoff.ui.history as history_view
-import typeoff.audio.mic_probe as mic_probe
-import typeoff.win.autostart as autostart
-from typeoff import runtime_check, downloader
+import saymore.ui.settings as settings_window
+import saymore.ui.history as history_view
+import saymore.audio.mic_probe as mic_probe
+import saymore.win.autostart as autostart
+from saymore import runtime_check, downloader
 def _build_html(cfg, cfg_dir, history_dir, reminders_log, tab):
     payload = {
         "settings": settings_window.settings_data(cfg, cfg_dir),
@@ -203,7 +203,7 @@ class _Api:
             seen = Path(self._cfg).parent / ".tray_notice_seen"
             if not seen.exists():
                 (Path(self._cfg).parent / ".tray_notice").write_text(
-                    "已最小化到系统托盘，Typeoff 仍在后台运行", encoding="utf-8")
+                    "已最小化到系统托盘，Saymore 仍在后台运行", encoding="utf-8")
                 seen.write_text("1", encoding="utf-8")
         except Exception:
             pass
@@ -238,12 +238,12 @@ def _run_gui(config_path, history_dir, reminders_log, import_trigger, restart_tr
         return False
     win.events.closing += _on_closing
 
-    from typeoff.paths import PROJECT_ROOT
-    ico = PROJECT_ROOT / "typeoff.ico"
+    from saymore.paths import PROJECT_ROOT
+    ico = PROJECT_ROOT / "saymore.ico"
     webview.start(icon=str(ico) if ico.exists() else None)
 
 
-_WIN_TITLE = "Typeoff"
+_WIN_TITLE = "Saymore"
 
 
 def _focus_existing():
@@ -271,9 +271,9 @@ def show(config_path, history_dir, reminders_log, import_trigger, restart_trigge
     kw = {"cwd": str(Path(__file__).resolve().parent.parent.parent)}
     if os.name == "nt":
         kw["creationflags"] = 0x08000000  # CREATE_NO_WINDOW：别闪出控制台
-    # 用 -m 而不是脚本路径：脚本路径会把 typeoff/ui/ 塞进 sys.path[0]，
-    # 里面的 `import typeoff.ui.settings` 就找不到顶级 typeoff 包（迁包后遗症）
-    subprocess.Popen([sys.executable, "-m", "typeoff.ui.main_window", str(config_path),
+    # 用 -m 而不是脚本路径：脚本路径会把 saymore/ui/ 塞进 sys.path[0]，
+    # 里面的 `import saymore.ui.settings` 就找不到顶级 saymore 包（迁包后遗症）
+    subprocess.Popen([sys.executable, "-m", "saymore.ui.main_window", str(config_path),
                       str(history_dir), str(reminders_log), str(import_trigger),
                       str(restart_trigger), tab], **kw)
 
@@ -283,7 +283,7 @@ _HTML = r"""<!doctype html>
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Typeoff</title>
+<title>Saymore</title>
 <style>
 :root{
   --gray:#f5f5f7; --white:#fff; --text:#1d1d1f; --muted:#86868b; --border:#e5e5ea;
@@ -502,7 +502,7 @@ button.primary:active{opacity:.85}
 <body>
 <div class="app">
   <aside class="side">
-    <div class="brand pywebview-drag-region"><div class="en">Typeoff</div></div>
+    <div class="brand pywebview-drag-region"><div class="en">Saymore</div></div>
     <nav id="nav"></nav>
     <div class="foot">设置改动自动保存<br>多数设置重启后生效</div>
   </aside>
@@ -940,7 +940,7 @@ function renderRuntime(runtime) {
     const banner = document.createElement('div'); banner.className = 'rt-banner warn';
     banner.innerHTML = '<span class="dot"></span><span></span>';
     banner.querySelector('span:last-child').textContent =
-      `安装包组件缺失（${localMissing.map(x => x.label).join('、')}），请重装 Typeoff。`;
+      `安装包组件缺失（${localMissing.map(x => x.label).join('、')}），请重装 Saymore。`;
     pr.appendChild(banner);
   } else if (networkReady) {
     const bar = document.createElement('div'); bar.className = 'rt-restart';

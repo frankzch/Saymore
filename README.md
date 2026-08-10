@@ -1,4 +1,4 @@
-# Typeoff · 本地中文语音输入
+# Saymore · 本地中文语音输入
 
 > Windows 上一个**任何窗口都能用**的中文语音输入常驻程序。说唤醒词 → 说话 → 文字直接落在光标处。全程本地(Qwen3-ASR + 本地整理模型),不联网、不上传、断网可用。
 
@@ -26,7 +26,7 @@
 
 ## 跟市面上的东西比,它到底不一样在哪
 
-| | Typeoff | 讯飞/搜狗输入法(语音) | Windows 自带语音识别 | Whisper / SenseVoice 一类的开源桌面前端 | superwhisper / Wispr Flow(商业) |
+| | Saymore | 讯飞/搜狗输入法(语音) | Windows 自带语音识别 | Whisper / SenseVoice 一类的开源桌面前端 | superwhisper / Wispr Flow(商业) |
 |---|---|---|---|---|---|
 | **中文识别质量** | ✅ Qwen3-ASR,当前中文 SOTA 之一 | ✅ 很好 | ⚠️ 一般 | ⚠️ Whisper 中文一般;SenseVoice OK | ✅ 好(多为云端) |
 | **本地 / 隐私** | ✅ **100% 本地** | ❌ 云端上传 | ✅ 本地 | ✅ 本地 | ❌ 多为云端(Mac 有本地版) |
@@ -37,11 +37,11 @@
 | **平台** | Windows | Win/Mac/移动 | Windows | 跨平台 | Mac 为主 |
 | **可扩展** | ✅ 开源 Python,配置文件全暴露 | ❌ | ❌ | ✅ | ❌ |
 
-**跟输入法比:** 输入法要么上传云端(隐私),要么中文识别弱;而且你切窗口经常要重新点它一下、按快捷键。Typeoff 是一个后台守护进程,唤醒词一喊就工作,配一个本地 LoRA 顺手把口语改成能直接发出去的书面语。
+**跟输入法比:** 输入法要么上传云端(隐私),要么中文识别弱;而且你切窗口经常要重新点它一下、按快捷键。Saymore 是一个后台守护进程,唤醒词一喊就工作,配一个本地 LoRA 顺手把口语改成能直接发出去的书面语。
 
-**跟 Whisper 系开源方案比:** Whisper 中文效果撑不起严肃使用,SenseVoice 尚可但没有润色;而且大多是"打开一个窗口按住某个键说话",不是常驻输入法。Typeoff 用 Qwen3-ASR + 4bit 量化 + Vulkan,冷启动几秒、显存要求低、常驻工作,识别 + 润色 + 落字打包解决。
+**跟 Whisper 系开源方案比:** Whisper 中文效果撑不起严肃使用,SenseVoice 尚可但没有润色;而且大多是"打开一个窗口按住某个键说话",不是常驻输入法。Saymore 用 Qwen3-ASR + 4bit 量化 + Vulkan,冷启动几秒、显存要求低、常驻工作,识别 + 润色 + 落字打包解决。
 
-**跟 superwhisper / Wispr Flow 比:** 那些东西思路最接近,但一是 Mac 优先、二是普遍走云 LLM 做润色。Typeoff 是 **Windows + 完全本地** 的替代品。
+**跟 superwhisper / Wispr Flow 比:** 那些东西思路最接近,但一是 Mac 优先、二是普遍走云 LLM 做润色。Saymore 是 **Windows + 完全本地** 的替代品。
 
 ---
 
@@ -80,9 +80,9 @@
 ### UI
 - **右下角常驻圆环**:绿=聆听(环内实时音量波形)、灰=休眠、剩最后 1 分钟显示倒计时(≤10s 转红),右键弹菜单:主界面 / 退出。Pillow 超采样 + Win32 分层窗口(逐像素 alpha),边缘无锯齿。
 - **玻璃文字面板**:识别句先攒到面板显示,说"发送"才整体回填,给你机会看/口头改。
-- **系统托盘**:Typeoff logo,左键拉起主界面,右键同款菜单。
+- **系统托盘**:Saymore logo,左键拉起主界面,右键同款菜单。
 - **主界面**:pywebview 无边框窗口,Apple 风分组列表,左侧四 tab(设置 / 热词 / 历史 / 导入)。
-- **开机自启**:走 `HKCU\...\Run` 注册表项(项名 `Typeoff`),这样任务管理器→启动、设置→应用→启动里都能看见能开关。免管理员、无控制台窗口。
+- **开机自启**:走 `HKCU\...\Run` 注册表项(项名 `Saymore`),这样任务管理器→启动、设置→应用→启动里都能看见能开关。免管理员、无控制台窗口。
 
 ---
 
@@ -148,7 +148,7 @@ powershell -ExecutionPolicy Bypass -File stop.ps1    # 停
 
 ```powershell
 .\.venv\Scripts\Activate.ps1
-python -m typeoff.main
+python -m saymore.main
 ```
 
 > ⚠️ 前台跑**不要**用 `| Select-Object` 之类的管道,会把 stdout 变 GBK,程序里 emoji `print` 抛异常让后台线程崩掉(表现为"说话没反应")。

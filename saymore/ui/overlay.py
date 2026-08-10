@@ -12,12 +12,12 @@ from pathlib import Path
 
 import numpy as np
 
-import typeoff.ui.panel as panel
-import typeoff.ui.tray as tray
-import typeoff.ui.style as ui_style
-from typeoff.paths import CONFIG_PATH
+import saymore.ui.panel as panel
+import saymore.ui.tray as tray
+import saymore.ui.style as ui_style
+from saymore.paths import CONFIG_PATH
 
-_ICON_PATH = CONFIG_PATH.parent / "typeoff.ico"
+_ICON_PATH = CONFIG_PATH.parent / "saymore.ico"
 
 
 # 悬浮窗几何/配色（供 _render_overlay 与 run_overlay 共用）
@@ -61,7 +61,7 @@ def _draw_tokens(canvas, w, strip_h, tin, tout, fade):
 
 
 def _get_cat_frames():
-    """从 typeoff/ui/assets/ 加载猫的姿势 PNG，按 alpha 边界裁切、缩放居中到超采样画布，缓存返回。
+    """从 saymore/ui/assets/ 加载猫的姿势 PNG，按 alpha 边界裁切、缩放居中到超采样画布，缓存返回。
     返回 {状态名: 超采样 RGBA 图} 的 dict；缺图则返回 None（退回纯进度环）。"""
     global _CAT_FRAMES
     if _CAT_FRAMES is not None:
@@ -123,13 +123,13 @@ def _downloading_hint(runtime):
     """未就绪时的面板文案：把所有网络下载项进度聚合成一句"正在下载模型文件 (X%)"。
     没提示具体哪个文件——用户不关心 gguf 文件名，只关心什么时候能用。"""
     try:
-        from typeoff import downloader
+        from saymore import downloader
     except Exception:  # noqa: BLE001 兜底：downloader 未导入时静默
         return "运行环境未就绪。"
     missing = [m for m in (runtime.get("missing") or []) if m.get("network")]
     if not missing:
         # 缺的都是安装包内置项：无法自愈，提示重装
-        return "运行环境组件缺失，请重装 Typeoff。"
+        return "运行环境组件缺失，请重装 Saymore。"
     tasks = downloader.progress()
     # 按 size_mb 加权聚合进度：大文件更能体现真实完成度
     total_mb = sum(m.get("size_mb", 1) for m in missing) or 1
@@ -392,7 +392,7 @@ def run_overlay(state):
             if warming:                                           # 冷启动中：完全静止，代表停止状态
                 cat = frames["stand"]
             else:
-                import typeoff.tts as _tts_mod
+                import saymore.tts as _tts_mod
                 if _tts_mod.playing:                              # TTS 播报中：张嘴↔闭嘴
                     cat = frames["mouth" if int(now * 4) % 2 else "stand"]
                 elif busy:                                        # 调大模型/识别中：快速低头↔抬头
@@ -501,7 +501,7 @@ def run_overlay(state):
     def open_main():
         """拉起主界面（圆环右键菜单、托盘左键/菜单共用）。
         运行环境未就绪（下载中）时默认落到"运行环境"tab，让用户看得到进度；否则回默认设置 tab。"""
-        import typeoff.ui.main_window as main_window
+        import saymore.ui.main_window as main_window
         _rt = state.get("runtime") or {}
         _tab = "runtime" if _rt.get("ready") is False else "settings"
         try:
@@ -514,7 +514,7 @@ def run_overlay(state):
     def show_menu():
         """小圆环右键菜单：只两项——主界面 / 退出程序（设置/历史/导入全收进主界面 tab）。
         Apple 风自绘弹窗（ui_style），后台线程跑 tkinter 不阻塞消息循环。"""
-        import typeoff.ui.style as ui_style
+        import saymore.ui.style as ui_style
         items = [("主界面", open_main),
                  None,
                  ("退出程序", lambda: state.__setitem__("quit", True), "danger")]
@@ -669,7 +669,7 @@ def run_overlay(state):
 
     # 系统托盘常驻图标：左键/双击拉起主界面，右键弹与圆环同款菜单（主界面 / 退出）。还没初始化完时
     # 用 tooltip 带一句"正在初始化"——纯被动，鼠标划过去才看得到，不会像悬浮窗那样无端弹出来。
-    _TRAY_TIP = "Typeoff"
+    _TRAY_TIP = "Saymore"
     try:
         tip = _TRAY_TIP if state.get("backend_ready", True) else f"{_TRAY_TIP}（正在初始化，请稍候…）"
         _tray[0] = tray.TrayIcon(hwnd, _ICON_PATH, tip,
@@ -693,7 +693,7 @@ def run_overlay(state):
                     msg_text = trigger.read_text(encoding="utf-8").strip()
                     trigger.unlink(missing_ok=True)
                     if msg_text and _tray[0] is not None:
-                        _tray[0].balloon("Typeoff", msg_text)
+                        _tray[0].balloon("Saymore", msg_text)
             except Exception as e:  # noqa: BLE001 监视线程别被单次异常杀死
                 print(f"[warn] 托盘气泡触发处理出错：{e}")
             time.sleep(0.3)

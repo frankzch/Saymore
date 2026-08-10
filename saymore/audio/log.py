@@ -16,7 +16,7 @@ from pathlib import Path
 
 import numpy as np
 
-from typeoff.paths import PROJECT_ROOT
+from saymore.paths import PROJECT_ROOT
 
 ROOT = PROJECT_ROOT / "logs" / "audio"
 

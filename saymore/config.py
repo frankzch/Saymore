@@ -7,12 +7,12 @@ config.json 成为完整的单一配置真源——设置窗口直接读它即�
 import json
 import re
 
-import typeoff.ui.style as ui_style
-from typeoff.paths import CONFIG_PATH, _resolve
+import saymore.ui.style as ui_style
+from saymore.paths import CONFIG_PATH, _resolve
 
 
 DEFAULT_CONFIG = {
-    "autostart": False,       # 登录 Windows 时是否自动后台启动 Typeoff（走任务计划程序，见 typeoff/win/autostart.py）
+    "autostart": False,       # 登录 Windows 时是否自动后台启动 Saymore（走任务计划程序，见 saymore/win/autostart.py）
     "wake_words": ["小美"],   # 唤醒词（可多个）；说中其一即进入聆听状态。建议 3-4 字且不常用
     "sleep_after_seconds": 300,  # 唤醒后静默超过此秒数（默认 5 分钟）进入完整休眠：回到待唤醒并卸载模型释放内存/显存。最后 60s 悬浮窗显示倒计时
     "kws_model_dir": "kws-model",       # sherpa-onnx KWS 模型目录（解压 release 得到，含 *.onnx + tokens.txt）

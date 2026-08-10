@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """路径基座：项目根目录 + 配置文件位置 + 相对路径解析。
 
-包内所有 __file__ 都在 typeoff/**/*.py，PROJECT_ROOT = typeoff/../。
+包内所有 __file__ 都在 saymore/**/*.py，PROJECT_ROOT = saymore/../。
 相对路径统一按项目根解析，让 config.json 里可以继续用 `models/xxx` 这种相对写法。"""
 from pathlib import Path
 

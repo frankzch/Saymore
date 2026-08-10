@@ -1,9 +1,9 @@
 # -*- mode: python ; coding: utf-8 -*-
-"""PyInstaller spec：把 Typeoff 打包成 onedir 应用。
-   pyinstaller typeoff.spec   → dist/Typeoff/  (含 Typeoff.exe + 所有依赖)
+"""PyInstaller spec：把 Saymore 打包成 onedir 应用。
+   pyinstaller saymore.spec   → dist/Saymore/  (含 Saymore.exe + 所有依赖)
 
 设计:
-- Windowed（-w）+ pythonw：无控制台闪现；日志走 typeoff/log_setup.py 落文件。
+- Windowed（-w）+ pythonw：无控制台闪现；日志走 saymore/log_setup.py 落文件。
 - onedir 而非 onefile：启动快、模型/lora 就地就绪，也便于 Inno Setup 打进安装包目录里。
 - assets 走 datas=[]：图标、猫帧 PNG、KWS/LoRA/VAD/llama.cpp 全部整目录搬过去。
 - hidden imports：sherpa_onnx / rapidocr_onnxruntime / edge_tts / webview 等含子模块动态导入。
@@ -26,20 +26,20 @@ datas += collect_data_files('rapidocr_onnxruntime')
 datas += collect_data_files('opencc')
 datas += collect_data_files('webview')
 
-# 项目自带资源（相对路径 → 打包后 dist/Typeoff/ 下同名目录）
+# 项目自带资源（相对路径 → 打包后 dist/Saymore/ 下同名目录）
 datas += [
-    ('typeoff/ui/assets', 'typeoff/ui/assets'),  # 猫姿势 PNG
+    ('saymore/ui/assets', 'saymore/ui/assets'),  # 猫姿势 PNG
     ('kws-model',         'kws-model'),          # 命令词唤醒模型
     ('polish_lora',       'polish_lora'),        # 整理 LoRA + prompt
     ('llama-cpp',         'llama-cpp'),          # 推理引擎（含 Vulkan）
     ('silero_vad.onnx',   '.'),                  # 端点检测
-    ('typeoff.ico',       '.'),
+    ('saymore.ico',       '.'),
     ('config.json',       '.'),                  # 默认配置模板；用户改动写就地
     ('terms.txt',         '.'),                  # 静态术语表种子
 ]
 
 a = Analysis(
-    ['run_typeoff.py'],
+    ['run_saymore.py'],
     pathex=['.'],
     binaries=[],
     datas=datas,
@@ -64,14 +64,14 @@ exe = EXE(
     a.scripts,
     [],
     exclude_binaries=True,
-    name='Typeoff',
+    name='Saymore',
     debug=False,
     bootloader_ignore_signals=False,
     strip=False,
     upx=False,           # UPX 压 sherpa-onnx/onnxruntime 的原生 DLL 常出问题，关掉
     console=False,       # pythonw 模式：无控制台窗口
     windowed=True,
-    icon='typeoff.ico',
+    icon='saymore.ico',
     disable_windowed_traceback=False,
 )
 
@@ -82,5 +82,5 @@ coll = COLLECT(
     strip=False,
     upx=False,
     upx_exclude=[],
-    name='Typeoff',
+    name='Saymore',
 )

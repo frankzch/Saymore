@@ -7,7 +7,7 @@
 """
 from pathlib import Path
 
-from typeoff.paths import PROJECT_ROOT
+from saymore.paths import PROJECT_ROOT
 
 _LORA_DIR = PROJECT_ROOT / "polish_lora"
 

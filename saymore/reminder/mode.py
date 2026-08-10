@@ -8,9 +8,9 @@ import time
 from collections import deque
 from pathlib import Path
 
-import typeoff.tts as tts
-import typeoff.reminder.chat as reminder_chat
-from typeoff.reminder.store import Reminders
+import saymore.tts as tts
+import saymore.reminder.chat as reminder_chat
+from saymore.reminder.store import Reminders
 
 # 催办默认值（config 没给时的兜底；正式默认在 voice_input.DEFAULT_CONFIG，方便用户改）
 _DEFAULT_NAG_TEMPLATES = [
@@ -112,7 +112,7 @@ class ReminderMode:
         上下文）。重叠切块不管文档怎么排版都安全，见 _chunk_overlap；重叠区可能被识别两次，
         靠 reminder_chat._execute 按 (text, due) 去重。每块都调一次模型，但只在处理完后念
         一次汇总，不然长文件导入会连续念好几句「好的」。"""
-        import typeoff.reminder.doc_import as doc_import  # 延迟导入：office/OCR 库没装也不影响其他功能
+        import saymore.reminder.doc_import as doc_import  # 延迟导入：office/OCR 库没装也不影响其他功能
         try:
             text = doc_import.extract(path)
         except Exception as e:
@@ -241,7 +241,7 @@ def _selfcheck():
     assert _chunk_overlap(short, size=100, overlap=30) == [short], "不超预算就别切"
 
     # —— 文件导入：长文件分块喂模型，只在末尾念一次汇总，不逐块念；重叠区重复识别不重复建 ——
-    import typeoff.reminder.doc_import as doc_import
+    import saymore.reminder.doc_import as doc_import
     from datetime import datetime, timedelta
     calls = []
 

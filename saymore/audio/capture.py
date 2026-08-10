@@ -11,7 +11,7 @@ import sys
 import numpy as np
 import sounddevice as sd
 
-from typeoff.paths import _resolve
+from saymore.paths import _resolve
 
 
 class Recorder:

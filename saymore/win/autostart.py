@@ -13,10 +13,10 @@ import subprocess
 import sys
 from pathlib import Path
 
-from typeoff.paths import PROJECT_ROOT
+from saymore.paths import PROJECT_ROOT
 
 RUN_KEY = r"Software\Microsoft\Windows\CurrentVersion\Run"
-VALUE_NAME = "Typeoff"
+VALUE_NAME = "Saymore"
 
 
 def _open_run(write=False):
@@ -35,13 +35,13 @@ def _pythonw_path():
 
 
 def _desired_command():
-    """自启命令行：cd 到项目根后用 pythonw -m typeoff.main 起。
+    """自启命令行：cd 到项目根后用 pythonw -m saymore.main 起。
     包一层 cmd /c 是为了顺带 cd——PROJECT_ROOT 里有 config.json、logs/ 等相对路径要用。
     """
     pyw = _pythonw_path()
     root = str(PROJECT_ROOT)
     # cmd /c 内部 cd /d 支持切盘符；参数用 " 转义空格
-    return f'cmd /c "cd /d "{root}" && "{pyw}" -m typeoff.main"'
+    return f'cmd /c "cd /d "{root}" && "{pyw}" -m saymore.main"'
 
 
 def is_enabled():

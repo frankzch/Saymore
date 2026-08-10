@@ -1,10 +1,10 @@
-"""Typeoff 主程序 —— 常驻后台，说出唤醒词后边说边转写并输入到当前焦点窗口，静默自动休眠。
+"""Saymore 主程序 —— 常驻后台，说出唤醒词后边说边转写并输入到当前焦点窗口，静默自动休眠。
 
-引擎: Qwen3-ASR (本地, llama.cpp/Vulkan, 见 typeoff/asr/llamacpp.py)
+引擎: Qwen3-ASR (本地, llama.cpp/Vulkan, 见 saymore/asr/llamacpp.py)
 输出: 转写文本经剪贴板 + Ctrl+V 粘贴到光标处（对中文/Unicode 最可靠）
 平台: Windows
 
-入口: python -m typeoff.main（一般由 start.ps1 拉起）
+入口: python -m saymore.main（一般由 start.ps1 拉起）
 """
 
 import json
@@ -27,19 +27,19 @@ try:
 except ImportError:
     opencc = None
 
-import typeoff.tts as tts
-import typeoff.ui.panel as panel
-import typeoff.ui.style as ui_style
-from typeoff.config import (DEFAULT_CONFIG, SENTENCE_END, JA_KO_RE,
+import saymore.tts as tts
+import saymore.ui.panel as panel
+import saymore.ui.style as ui_style
+from saymore.config import (DEFAULT_CONFIG, SENTENCE_END, JA_KO_RE,
                              load_config)
-from typeoff.paths import CONFIG_PATH, _resolve
-from typeoff import runtime_check
-from typeoff.hotwords.learn import HotWords
-from typeoff.hotwords.screen import ScreenContext, assemble_context, make_llm_extractor
-from typeoff.reminder.mode import ReminderMode
-from typeoff.win.focus import output_text, focus_window, click_permission_button
-from typeoff.ui.overlay import run_overlay
-from typeoff.audio.capture import Recorder, build_vad, build_keyword_spotter
+from saymore.paths import CONFIG_PATH, _resolve
+from saymore import runtime_check
+from saymore.hotwords.learn import HotWords
+from saymore.hotwords.screen import ScreenContext, assemble_context, make_llm_extractor
+from saymore.reminder.mode import ReminderMode
+from saymore.win.focus import output_text, focus_window, click_permission_button
+from saymore.ui.overlay import run_overlay
+from saymore.audio.capture import Recorder, build_vad, build_keyword_spotter
 
 
 # 提醒模式下每收一句的简短人声应答（轮换，听着自然），替代听写模式的猫叫
@@ -48,7 +48,7 @@ _REMINDER_CUES = ["嗯", "好的", "嗯哼", "好"]
 
 def _close_main_window():
     """重启前把主窗口子进程一并关掉——它是 subprocess.Popen 出来的独立进程，
-    不会跟着本进程退。找 "Typeoff" 顶层窗口 → 定位 PID → TerminateProcess。
+    不会跟着本进程退。找 "Saymore" 顶层窗口 → 定位 PID → TerminateProcess。
     找不到就静默跳过（本来就没开）。仅 Windows。"""
     if os.name != "nt":
         return
@@ -57,7 +57,7 @@ def _close_main_window():
         from ctypes import wintypes
         u = ctypes.windll.user32
         k = ctypes.windll.kernel32
-        hwnd = u.FindWindowW(None, "Typeoff")
+        hwnd = u.FindWindowW(None, "Saymore")
         if not hwnd:
             return
         pid = wintypes.DWORD()
@@ -86,13 +86,13 @@ def main():
     # 重定向到按日切分的日志：logs/voice_input-YYYY-MM-DD.log，每行自动贴 HH:MM:SS.mmm
     # ——现有 print() 免改就带时间戳，便于事后定位哪一步慢。
     if sys.stdout is None or sys.stderr is None:
-        from typeoff.log_setup import install
+        from saymore.log_setup import install
         install(CONFIG_PATH.parent / "logs")
         print(f"===== 启动 =====")
 
     if os.name == "nt":  # 必须在本进程建任何窗口之前调用，否则托盘 toast 通知显示来源会是"Python"
-        import typeoff.ui.tray as tray
-        tray.register_app_identity(CONFIG_PATH.parent / "typeoff.ico")
+        import saymore.ui.tray as tray
+        tray.register_app_identity(CONFIG_PATH.parent / "saymore.ico")
 
     ready_marker = CONFIG_PATH.parent / ".ready"  # 存在=后台已在监听；悬浮窗/主界面靠它判断是否还在初始化
     ready_marker.unlink(missing_ok=True)
@@ -145,7 +145,7 @@ def main():
 
     if first_run:  # 装完第一次打开：自动拉起主界面，别让用户对着空桌面找不到入口
         print("[info] 首次启动，自动打开主界面。")
-        import typeoff.ui.main_window as main_window
+        import saymore.ui.main_window as main_window
         # 首启若运行环境未就绪，直接落到运行环境 tab；否则默认设置 tab
         _tab = "runtime" if not runtime["ready"] else "settings"
         main_window.show(CONFIG_PATH, state["history_file"], state["reminders_log"],
@@ -155,13 +155,13 @@ def main():
     # 但不起 llama-server / worker —— 没模型就没转写。用户说唤醒词后 15s 自动回休眠让圆环
     # 消失（下载中反正没啥可做）。下载全成功即写 restart_trigger 自我重启换新进程干净起后端。
     if not runtime["ready"]:
-        from typeoff import downloader
+        from saymore import downloader
         network_missing = [m for m in runtime["missing"] if m.get("network")]
         # 内置项缺失（安装包被破坏）—— 无法自愈，拉主界面让用户重装
         if any(not m.get("network") for m in runtime["missing"]) or not network_missing:
             print(f"[warn] 有安装包内置组件缺失，需重装：{[m['label'] for m in runtime['missing'] if not m.get('network')]}")
             if not first_run:
-                import typeoff.ui.main_window as main_window
+                import saymore.ui.main_window as main_window
                 main_window.show(CONFIG_PATH, state["history_file"], state["reminders_log"],
                                  state["import_trigger"], state["restart_trigger"], tab="runtime")
         # 逐项启后台下载（downloader.start 各自开线程，非阻塞）
@@ -301,7 +301,7 @@ def main():
                         trigger.unlink(missing_ok=True)
                         print("[info] 收到重启信号，拉起新进程接班…")
                         _close_main_window()  # 关掉可能还开着的主窗口子进程，避免遗留旧页面
-                        subprocess.Popen([sys.executable, "-m", "typeoff.main"],
+                        subprocess.Popen([sys.executable, "-m", "saymore.main"],
                                          cwd=str(CONFIG_PATH.parent))
                         state["quit"] = True
                 except Exception as e:  # noqa: BLE001
@@ -314,11 +314,11 @@ def main():
         return
 
     # llama.cpp 后端：llama-server 常驻本地(Vulkan GPU)，HTTP 转写，见 asr_llamacpp.py
-    from typeoff.asr.llamacpp import LlamaASR
+    from saymore.asr.llamacpp import LlamaASR
     # 整理 LoRA：合一 multi LoRA 挂给 llama-server——一个进程内 转写 + 四风格整理
     # （保守/深度/邮件/00后 同一 adapter，靠 system 切人格；finetune/ROUNDS.md multi 轮）。
     _loras = {}
-    import typeoff.polish.local as _lc  # find_gguf 只做 gguf 定位
+    import saymore.polish.local as _lc  # find_gguf 只做 gguf 定位
     _want = []
     if cfg.get("local_polish"):
         if _lc.find_gguf("multi-lora.gguf"):
@@ -534,7 +534,7 @@ def main():
 
     def confirm_quit():
         """弹出 确认/取消 对话框，确认后置 quit 让主循环退出。阻塞当前 worker 线程，无妨。"""
-        import typeoff.ui.style as ui_style
+        import saymore.ui.style as ui_style
         if ui_style.confirm("退出确认", "确认退出语音输入？", ok="退出", danger=True):
             state["quit"] = True
             print("[done] 用户确认退出")
@@ -551,7 +551,7 @@ def main():
             n_list[:] = [0] * len(n_list)
         if not pa:
             return
-        import typeoff.audio.log as audio_log
+        import saymore.audio.log as audio_log
         for a, sr, t, c in pa:
             audio_log.save(a, sr, t, c)
 
@@ -627,7 +627,7 @@ def main():
         core = text.strip()
         if len(core) < 5 and not any(c in core for c in "，。！？、,.!?;；：:"):
             return text, None
-        import typeoff.polish.local as local_polish  # 取该 mode 的提示词（训推一致：合一 LoRA 靠 system 切人格）
+        import saymore.polish.local as local_polish  # 取该 mode 的提示词（训推一致：合一 LoRA 靠 system 切人格）
         # 合一 multi 挂着就恒走它（四风格同一 adapter）；回滚到老双人格时才按 mode 分 deep/basic。
         role = "multi" if "multi" in llama_asr.loras else ("deep" if mode == "深度整理" else "basic")
         try:
@@ -967,7 +967,7 @@ def main():
                     trigger.unlink(missing_ok=True)
                     print("[info] 设置窗口请求重启，拉起新进程接班…")
                     _close_main_window()  # 关掉可能还开着的主窗口子进程，避免遗留旧页面
-                    subprocess.Popen([sys.executable, "-m", "typeoff.main"],
+                    subprocess.Popen([sys.executable, "-m", "saymore.main"],
                                      cwd=str(CONFIG_PATH.parent))
                     state["quit"] = True
             except Exception as e:  # noqa: BLE001 监视线程别被单次异常杀死

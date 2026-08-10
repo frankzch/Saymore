@@ -10,7 +10,7 @@ import time
 from ctypes import wintypes
 
 MSG = 0x8000  # WM_APP：托盘回调消息号，wndproc 见此即调 handle()
-_AUMID = "Typeoff.VoiceInput"  # 应用身份 ID：不注册的话 Win10/11 弹的 toast 会显示成来源"Python"
+_AUMID = "Saymore.VoiceInput"  # 应用身份 ID：不注册的话 Win10/11 弹的 toast 会显示成来源"Python"
 
 _NIM_ADD, _NIM_MODIFY, _NIM_DELETE, _NIM_SETVERSION = 0, 1, 2, 4
 _NOTIFYICON_VERSION_4 = 4
@@ -34,7 +34,7 @@ class _NOTIFYICONDATA(ctypes.Structure):
 def register_app_identity(ico_path):
     """给进程注册一个应用身份(AUMID)+ 注册表里的展示名/图标：balloon()走的 NIIF_INFO 在
     Win10/11 上其实是走 Action Center 的 toast 通知，没有 AUMID 时 Windows 会把来源显示成
-    宿主进程"Python"而不是"Typeoff"。两步都失败也不影响托盘图标本身正常工作，只是通知来源
+    宿主进程"Python"而不是"Saymore"。两步都失败也不影响托盘图标本身正常工作，只是通知来源
     名字不好看，所以异常直接吞掉。
 
     必须在进程创建任何窗口/UI 之前调用（AUMID 只能在进程生命周期内设一次、且要趁早）——
@@ -48,7 +48,7 @@ def register_app_identity(ico_path):
         import winreg
         key_path = f"Software\\Classes\\AppUserModelId\\{_AUMID}"
         with winreg.CreateKey(winreg.HKEY_CURRENT_USER, key_path) as key:
-            winreg.SetValueEx(key, "DisplayName", 0, winreg.REG_SZ, "Typeoff")
+            winreg.SetValueEx(key, "DisplayName", 0, winreg.REG_SZ, "Saymore")
             winreg.SetValueEx(key, "IconUri", 0, winreg.REG_SZ, str(ico_path))
     except Exception:
         pass

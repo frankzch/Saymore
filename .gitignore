@@ -35,8 +35,8 @@ hotwords.txt
 
 # 猫动画：仅入库运行时加载的透明帧 *_t.png；2048 原图与原始照片是再生成素材，体积大且含隐私，不入库
 2022409892.jpg
-typeoff/ui/assets/*.png
-!typeoff/ui/assets/*_t.png
+saymore/ui/assets/*.png
+!saymore/ui/assets/*_t.png
 
 # 微调工作区：训练脚本 / 数据集 / checkpoint 全部不公开；成品 LoRA 已迁至 polish_lora/ 随仓库分发
 finetune/

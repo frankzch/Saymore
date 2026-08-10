@@ -14,13 +14,13 @@ item = {key, label, role, size_mb, network, note, path}
 
 未就绪时 main.py 跳过语音后端初始化；面板 / 主窗口据此显示红色警告并引导下载。
 """
-from typeoff.paths import _resolve
+from saymore.paths import _resolve
 
 
 # 需联网下载项的默认源 URL 列表（按序尝试，前面失败换后面）。
 # 占位符 __REPO__ 是上传后你的 HuggingFace/ModelScope 仓库 ID（形如 "yourname/repo-name"）；
 # 用户可在 config.json 里加 "download_sources": {"asr_gguf": ["url1", "url2"]} 覆盖。
-_HF_REPO = "REPLACE_WITH_YOUR_HF_REPO"       # 上传后改这里；如 "frankzch/Typeoff-Qwen3-ASR"
+_HF_REPO = "REPLACE_WITH_YOUR_HF_REPO"       # 上传后改这里；如 "frankzch/Saymore-Qwen3-ASR"
 _MS_REPO = "frankzch/Qwen3-ASR-1.7B-GGUF"
 
 def _default_urls(filename):
