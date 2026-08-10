@@ -13,7 +13,6 @@ import queue
 import random
 import re
 import signal
-import subprocess
 import sys
 import time
 import threading
@@ -301,8 +300,8 @@ def main():
                         trigger.unlink(missing_ok=True)
                         print("[info] 收到重启信号，拉起新进程接班…")
                         _close_main_window()  # 关掉可能还开着的主窗口子进程，避免遗留旧页面
-                        subprocess.Popen([sys.executable, "-m", "saymore.main"],
-                                         cwd=str(CONFIG_PATH.parent))
+                        from saymore.proc import spawn_backend
+                        spawn_backend()
                         state["quit"] = True
                 except Exception as e:  # noqa: BLE001
                     print(f"[warn] 重启触发处理出错：{e}")
@@ -967,8 +966,8 @@ def main():
                     trigger.unlink(missing_ok=True)
                     print("[info] 设置窗口请求重启，拉起新进程接班…")
                     _close_main_window()  # 关掉可能还开着的主窗口子进程，避免遗留旧页面
-                    subprocess.Popen([sys.executable, "-m", "saymore.main"],
-                                     cwd=str(CONFIG_PATH.parent))
+                    from saymore.proc import spawn_backend
+                    spawn_backend()
                     state["quit"] = True
             except Exception as e:  # noqa: BLE001 监视线程别被单次异常杀死
                 print(f"[warn] 重启触发处理出错：{e}")

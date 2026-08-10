@@ -265,17 +265,14 @@ def _focus_existing():
 
 def show(config_path, history_dir, reminders_log, import_trigger, restart_trigger, tab="settings"):
     """拉起独立子进程显示主界面，立即返回（不阻塞调用线程）。后台线程可安全调用。
-    已开着一个就前置复用它，不再叠开新窗口。"""
+    已开着一个就前置复用它，不再叠开新窗口。启动方式集中在 saymore.proc,
+    打包/开发环境用不同命令行(见 proc.py 顶注)——历史上"exe 假装是 python 解释器"
+    的老路径在 PyInstaller 下会产生进程病毒。"""
     if _focus_existing():
         return
-    kw = {"cwd": str(Path(__file__).resolve().parent.parent.parent)}
-    if os.name == "nt":
-        kw["creationflags"] = 0x08000000  # CREATE_NO_WINDOW：别闪出控制台
-    # 用 -m 而不是脚本路径：脚本路径会把 saymore/ui/ 塞进 sys.path[0]，
-    # 里面的 `import saymore.ui.settings` 就找不到顶级 saymore 包（迁包后遗症）
-    subprocess.Popen([sys.executable, "-m", "saymore.ui.main_window", str(config_path),
-                      str(history_dir), str(reminders_log), str(import_trigger),
-                      str(restart_trigger), tab], **kw)
+    from saymore.proc import spawn_ui_main
+    spawn_ui_main(config_path, history_dir, reminders_log,
+                  import_trigger, restart_trigger, tab)
 
 
 _HTML = r"""<!doctype html>

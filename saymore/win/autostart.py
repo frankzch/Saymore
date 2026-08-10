@@ -35,11 +35,17 @@ def _pythonw_path():
 
 
 def _desired_command():
-    """自启命令行：cd 到项目根后用 pythonw -m saymore.main 起。
-    包一层 cmd /c 是为了顺带 cd——PROJECT_ROOT 里有 config.json、logs/ 等相对路径要用。
+    """自启命令行。
+    打包后 sys.executable 就是 Saymore.exe,无参启动即主后端(见 saymore.proc),
+      不能再拼 `-m saymore.main`——PyInstaller bootloader 会无视这些参数。
+    开发时用 pythonw -m saymore.main,并 cmd /c cd 到项目根,以让 config.json、
+      logs/ 等相对路径生效。打包后 Saymore.exe 内部会走 CONFIG_PATH 绝对路径,
+      不需要 cd,直接注册 exe 路径。
     """
-    pyw = _pythonw_path()
     root = str(PROJECT_ROOT)
+    if getattr(sys, "frozen", False):
+        return f'"{sys.executable}"'
+    pyw = _pythonw_path()
     # cmd /c 内部 cd /d 支持切盘符；参数用 " 转义空格
     return f'cmd /c "cd /d "{root}" && "{pyw}" -m saymore.main"'
 

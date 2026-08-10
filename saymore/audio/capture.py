@@ -5,8 +5,6 @@ build_vad 造 Silero VAD、build_keyword_spotter 造 sherpa-onnx KWS 唤醒器�
 从 voice_input.py 拆出——参数由主程序传入，路径解析复用 paths._resolve。
 """
 import re
-import subprocess
-import sys
 
 import numpy as np
 import sounddevice as sd
@@ -225,24 +223,27 @@ def build_keyword_spotter(cfg, wake_words):
         print(f"[warn] KWS 模型文件不全（需 encoder/decoder/joiner*.onnx + tokens.txt）于 {kdir}")
         return None
 
-    # 用自带 CLI 把中文唤醒词转成拼音 token 关键词文件（零训练，改 wake_words 即生效）
+    # 用自带 CLI 把中文唤醒词转成拼音 token 关键词文件（零训练，改 wake_words 即生效）。
+    # sherpa_onnx.cli.cli 是个 click group,直接在本进程内调 text2token 子命令,
+    # 省掉 subprocess——打包后 sys.executable 是 Saymore.exe,`-c "..."` 会被
+    # PyInstaller bootloader 无视、误启一个完整语音后端(进程病毒的来源之一)。
     raw = kdir / "keywords_raw.txt"
     keywords_file = kdir / "keywords.txt"
     norm_words = [normalize_wake_word(w) for w in wake_words if w.strip()]
     raw.write_text("\n".join(norm_words) + "\n", encoding="utf-8")
-    # 直接用当前解释器跑 cli，避免依赖 PATH（未激活 venv 时 sherpa-onnx-cli 不在 PATH）
-    cmd = [sys.executable, "-c", "from sherpa_onnx.cli import cli; cli()", "text2token",
-           "--tokens", str(tokens),
-           "--tokens-type", cfg["kws_tokens_type"]]
+    args = ["text2token",
+            "--tokens", str(tokens),
+            "--tokens-type", cfg["kws_tokens_type"]]
     if "phone" in cfg["kws_tokens_type"]:
         # phone+ppinyin 需要英文词→音素的 lexicon（中英模型自带 en.phone）
         lexicon = next(iter(kdir.glob("*.phone")), kdir / "lexicon.txt")
-        cmd += ["--lexicon", str(lexicon)]
-    cmd += [str(raw), str(keywords_file)]
+        args += ["--lexicon", str(lexicon)]
+    args += [str(raw), str(keywords_file)]
     try:
-        subprocess.run(cmd, check=True, capture_output=True, text=True)
-    except (subprocess.CalledProcessError, FileNotFoundError) as e:
-        msg = getattr(e, "stderr", "") or str(e)
+        from sherpa_onnx.cli import cli
+        cli.main(args=args, standalone_mode=False)
+    except Exception as e:  # noqa: BLE001 click 会抛 UsageError/SystemExit,也可能是模型异常
+        msg = str(e)
         if keywords_file.exists():
             print(f"[warn] 关键词自动生成失败，沿用已有 keywords.txt：{msg}")
         else:

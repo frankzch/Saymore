@@ -17,17 +17,15 @@ item = {key, label, role, size_mb, network, note, path}
 from saymore.paths import _resolve
 
 
-# 需联网下载项的默认源 URL 列表（按序尝试，前面失败换后面）。
-# 占位符 __REPO__ 是上传后你的 HuggingFace/ModelScope 仓库 ID（形如 "yourname/repo-name"）；
+# 需联网下载项的默认源 URL 列表。
+# 目前只用 ModelScope(国内直连稳,不吃代理);HF 侧仓库还没上传,暂不放 hf-mirror/huggingface
+# 源——占位符仓库会 404,让"多源回退"变成"先失败两次再走 ModelScope",观感=下载源失败。
+# 后续如上传 HF,把 _HF_REPO 填成真实仓库 ID、在 _default_urls 前面加两条即可。
 # 用户可在 config.json 里加 "download_sources": {"asr_gguf": ["url1", "url2"]} 覆盖。
-_HF_REPO = "REPLACE_WITH_YOUR_HF_REPO"       # 上传后改这里；如 "frankzch/Saymore-Qwen3-ASR"
 _MS_REPO = "frankzch/Qwen3-ASR-1.7B-GGUF"
 
 def _default_urls(filename):
-    """按 HF 镜像 → HF 原站 → ModelScope 的顺序拼源；国内 HF 镜像最快，全挂时兜底 ModelScope。"""
     return [
-        f"https://hf-mirror.com/{_HF_REPO}/resolve/main/{filename}",
-        f"https://huggingface.co/{_HF_REPO}/resolve/main/{filename}",
         f"https://modelscope.cn/api/v1/models/{_MS_REPO}/repo?Revision=master&FilePath={filename}",
     ]
 
