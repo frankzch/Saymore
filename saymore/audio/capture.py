@@ -240,18 +240,21 @@ def build_keyword_spotter(cfg, wake_words):
         lexicon = next(iter(kdir.glob("*.phone")), kdir / "lexicon.txt")
         args += ["--lexicon", str(lexicon)]
     args += [str(raw), str(keywords_file)]
+    gen_failed_msg = None
     try:
         from sherpa_onnx.cli import cli
         cli.main(args=args, standalone_mode=False)
     except Exception as e:  # noqa: BLE001 click 会抛 UsageError/SystemExit,也可能是模型异常
-        msg = str(e)
-        if keywords_file.exists():
-            print(f"[warn] 关键词自动生成失败，沿用已有 keywords.txt：{msg}")
-        else:
-            print(f"[error] 关键词生成失败且无现成文件，无法唤醒：{msg}\n"
+        gen_failed_msg = str(e)
+        if not keywords_file.exists():
+            print(f"[error] 关键词生成失败且无现成文件，无法唤醒：{gen_failed_msg}\n"
                   f"        请手动运行：sherpa-onnx-cli text2token --tokens {tokens} "
                   f"--tokens-type {cfg['kws_tokens_type']} {raw} {keywords_file}")
             return None
+        # 生成失败但磁盘上有旧 keywords.txt——先别急着"沿用"。下面统一做"标签比对"，
+        # 只有旧文件里的 @原词 恰好等于当前 wake_words 才算 OK；不等则响亮报错。
+        # (历史教训: sentencepiece 缺失导致 text2token 静默异常,老关键词一直被沿用,
+        # 用户在设置里改词看似生效实则永远不生效。见 saymore.spec 里 hidden imports 注释)
 
     # 生成成功但内容为空：拼音/音素都没转出来（如英文词不在词典、或中英没分开），此时唤醒永不触发，必须报错
     if not keywords_file.exists() or not keywords_file.read_text(encoding="utf-8").strip():
@@ -261,12 +264,32 @@ def build_keyword_spotter(cfg, wake_words):
     # 给每行关键词补 @原词 标签：默认 get_result() 只返回拼音 token，加标签后返回原词，便于区分多组唤醒词
     try:
         lines = [ln for ln in keywords_file.read_text(encoding="utf-8").splitlines() if ln.strip()]
-        if len(lines) == len(norm_words):
+        if gen_failed_msg is None and len(lines) == len(norm_words):
+            # 只在"这轮真生成成功"时才补标签、覆盖写；失败沿用分支绝不再回写。
             labeled = [ln if "@" in ln else f"{ln} @{w}" for ln, w in zip(lines, norm_words)]
             keywords_file.write_text("\n".join(labeled) + "\n", encoding="utf-8")
+            lines = labeled
     except OSError as e:
         print(f"[warn] 关键词标签写入失败，多组唤醒词可能无法区分: {e}")
-    print(f"[info] 已生成唤醒关键词: {norm_words}")
+
+    # 校验:磁盘上的 keywords.txt 里的 @原词 是否就是当前 wake_words。
+    # 一致 → 静默成功;不一致 → 响亮报错但**不 return None**,而是继续用旧词的 spotter——
+    # "改词没生效"是可以带病使用的软故障;"整个 spotter 建不出来"是硬故障,用户从"至少
+    # 默认词能应答"退化到"什么都不响应",反而更糟。教训:响亮 + 降级 > 响亮 + 瘫痪。
+    disk_labels = [ln.rsplit("@", 1)[1].strip() for ln in lines if "@" in ln]
+    if set(disk_labels) != set(norm_words):
+        hint = (f"pip install {gen_failed_msg.split(chr(39))[1]}"
+                if gen_failed_msg and "No module named" in gen_failed_msg and chr(39) in gen_failed_msg
+                else "按上面 text2token 命令手动生成 keywords.txt")
+        print(f"[error] 关键词生成失败,新的 wake_words={norm_words} 未能写入 keywords.txt,"
+              f"当前生效的仍是磁盘旧词={disk_labels}——说这些旧词才能唤醒!\n"
+              f"        生成异常: {gen_failed_msg or '未知'}\n"
+              f"        修复: {hint}。")
+    elif gen_failed_msg:
+        print(f"[warn] 关键词自动生成失败但磁盘旧文件与当前 wake_words 一致,沿用: {norm_words}。"
+              f"       生成异常: {gen_failed_msg}")
+    else:
+        print(f"[info] 已生成唤醒关键词: {norm_words}")
 
     return sherpa_onnx.KeywordSpotter(
         tokens=str(tokens),
