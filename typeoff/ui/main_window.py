@@ -17,6 +17,7 @@ import typeoff.ui.settings as settings_window
 import typeoff.ui.history as history_view
 import typeoff.audio.mic_probe as mic_probe
 import typeoff.win.autostart as autostart
+from typeoff import runtime_check, downloader
 def _build_html(cfg, cfg_dir, history_dir, reminders_log, tab):
     payload = {
         "settings": settings_window.settings_data(cfg, cfg_dir),
@@ -25,7 +26,8 @@ def _build_html(cfg, cfg_dir, history_dir, reminders_log, tab):
             "reminder": [{"t": t, "action": a, "text": s}
                          for t, a, s in history_view.reminder_changes(reminders_log)],
         },
-        "tab": tab if tab in ("settings", "hotwords", "history", "import") else "settings",
+        "runtime": runtime_check.check(cfg),  # {ready, missing, present}；驱动「运行环境」tab
+        "tab": tab if tab in ("settings", "hotwords", "history", "import", "runtime") else "settings",
     }
     data = json.dumps(payload, ensure_ascii=False).replace("</", "<\\/")
     return _HTML.replace("__DATA__", data)
@@ -122,6 +124,70 @@ class _Api:
         if self._meter is not None:
             self._meter.stop()
         return {"ok": True}
+
+    def runtime_scan(self):
+        """页面重扫运行环境（下载完/手动补齐后调）。返回 {ready, missing, present}。"""
+        try:
+            cfg = json.loads(Path(self._cfg).read_text(encoding="utf-8"))
+            return {"ok": True, "runtime": runtime_check.check(cfg)}
+        except Exception as e:  # noqa: BLE001
+            return {"ok": False, "msg": str(e)}
+
+    # ── 与语音进程的文件 IPC ─────────────────────────────
+    # 下载真正跑在语音进程里（本子进程看不到那个 downloader._TASKS）。
+    # 主窗口读语音进程写的 .download_status.json 取进度；写 .download_control.json 传控制。
+    def _status_file(self):
+        return Path(self._cfg).parent / ".download_status.json"
+
+    def _control_file(self):
+        return Path(self._cfg).parent / ".download_control.json"
+
+    def download_start(self, key):
+        """让语音进程启动/继续某项下载。写触发文件即可，具体 URL/路径由语音进程自己查。"""
+        try:
+            self._control_file().write_text(
+                json.dumps({"action": "start", "key": key}, ensure_ascii=False), encoding="utf-8")
+            return {"ok": True}
+        except Exception as e:  # noqa: BLE001
+            return {"ok": False, "msg": str(e)}
+
+    def download_progress(self):
+        """从状态文件读所有任务进度；文件不在（语音进程未在下载）返回空。"""
+        try:
+            f = self._status_file()
+            if not f.exists():
+                return {"ok": True, "tasks": {}}
+            data = json.loads(f.read_text(encoding="utf-8"))
+            return {"ok": True, "tasks": data.get("tasks") or {}}
+        except Exception as e:  # noqa: BLE001 半截 JSON 等偶发错，下轮再读
+            return {"ok": True, "tasks": {}, "msg": str(e)}
+
+    def download_cancel(self, key):
+        """让语音进程暂停某项下载。"""
+        try:
+            self._control_file().write_text(
+                json.dumps({"action": "cancel", "key": key}, ensure_ascii=False), encoding="utf-8")
+            return {"ok": True}
+        except Exception as e:  # noqa: BLE001
+            return {"ok": False, "msg": str(e)}
+
+    def download_reset(self, key):
+        """占位：状态由语音进程管理，主窗口不需要主动 reset。"""
+        return {"ok": True}
+
+    def reveal_path(self, path):
+        """在资源管理器里选中该文件；文件不在则打开其父目录。给「打开目录」按钮用。"""
+        try:
+            p = Path(path)
+            if p.exists():
+                subprocess.Popen(["explorer", "/select,", str(p)])
+            else:
+                parent = p.parent
+                parent.mkdir(parents=True, exist_ok=True)
+                subprocess.Popen(["explorer", str(parent)])
+            return {"ok": True}
+        except Exception as e:  # noqa: BLE001
+            return {"ok": False, "msg": str(e)}
 
     def minimize(self):
         if self._window is not None:
@@ -372,6 +438,57 @@ button.primary{border:0;background:var(--accent);color:#fff;font-size:14px;font-
 button.primary:active{opacity:.85}
 .impmsg{margin-top:14px;font-size:13.5px;color:var(--muted)}
 .impmsg.err{color:#ff453a}
+/* 运行环境 tab：顶部状态条 + 分组卡片列表 */
+#p-runtime{max-width:720px}
+.rt-banner{margin:14px 0 6px;padding:12px 16px;border-radius:12px;
+  border:1px solid var(--border);background:var(--tile);
+  display:flex;align-items:center;gap:10px;font-size:14px}
+.rt-banner.info{background:rgba(10,132,255,.10);border-color:rgba(10,132,255,.28);color:var(--accent)}
+.rt-banner.ok{background:rgba(48,209,88,.10);border-color:rgba(48,209,88,.28);color:#30a854}
+.rt-banner.warn{background:rgba(255,69,58,.10);border-color:rgba(255,69,58,.32);color:#ff453a}
+.rt-banner .dot{width:9px;height:9px;border-radius:50%;flex:0 0 auto;background:currentColor}
+.rt-group{margin:18px 0 6px}
+.rt-group h3{margin:0 4px 8px;font-size:14px;font-weight:700;color:var(--muted);
+  text-transform:uppercase;letter-spacing:.05em}
+.rt-item{background:var(--tile);border:1px solid var(--tile-line);border-radius:14px;
+  padding:14px 16px;margin-bottom:10px}
+.rt-head{display:flex;align-items:center;gap:10px;flex-wrap:wrap}
+.rt-head .label{font-weight:600;font-size:14.5px}
+.rt-badge{font-size:11.5px;font-weight:600;padding:2px 8px;border-radius:6px}
+.rt-badge.ok{background:rgba(48,209,88,.15);color:#2c9c4f}
+.rt-badge.miss{background:rgba(255,69,58,.15);color:#ff453a}
+.rt-role{font-size:12px;color:var(--muted)}
+.rt-note{color:var(--muted);font-size:12.5px;margin-top:4px;line-height:1.45}
+.rt-path{color:var(--muted);font-size:11.5px;margin-top:6px;word-break:break-all;
+  font-family:ui-monospace,"Cascadia Mono","Consolas",monospace}
+.rt-actions{display:flex;gap:8px;margin-top:10px;flex-wrap:wrap}
+.rt-actions button{border:0;font:inherit;font-size:13px;font-weight:500;padding:6px 14px;
+  border-radius:8px;cursor:pointer}
+.rt-actions button.primary{background:var(--accent);color:#fff}
+.rt-actions button.primary:active{opacity:.85}
+.rt-actions button.ghost{background:transparent;color:var(--text);border:1px solid var(--border)}
+.rt-actions button.ghost:hover{background:var(--hover)}
+.rt-actions button:disabled{opacity:.5;cursor:not-allowed}
+.rt-size{color:var(--muted);font-size:12px;margin-left:auto}
+/* 下载进度条：卡片底部整条 */
+.rt-dl{margin-top:10px;display:none;flex-direction:column;gap:4px}
+.rt-dl.show{display:flex}
+.rt-dl-bar{position:relative;height:8px;border-radius:4px;background:var(--border);overflow:hidden}
+.rt-dl-fill{position:absolute;left:0;top:0;bottom:0;width:0%;background:var(--accent);
+  border-radius:4px;transition:width .2s ease-out}
+.rt-dl-fill.err{background:#ff453a}
+.rt-dl-fill.done{background:#30d158}
+.rt-dl-meta{display:flex;justify-content:space-between;font-size:12px;color:var(--muted)}
+.rt-dl-meta .msg{color:var(--text)}
+.rt-dl-meta .msg.err{color:#ff453a}
+/* 全部就绪后的重启横条：顶端替换 banner */
+.rt-restart{margin:14px 0 6px;padding:14px 18px;border-radius:12px;
+  background:rgba(48,209,88,.12);border:1px solid rgba(48,209,88,.3);
+  display:flex;align-items:center;gap:12px;font-size:14px}
+.rt-restart .msg{flex:1}
+.rt-restart button{border:0;background:var(--accent);color:#fff;font:inherit;font-weight:500;
+  padding:8px 18px;border-radius:9px;cursor:pointer}
+.rt-restart button:active{opacity:.85}
 /* 重启提示条：左下角常驻，直到点了重启或关窗自动重启 */
 .restart-bar{position:fixed;left:16px;bottom:16px;display:none;align-items:center;gap:10px;
   background:var(--card);border:1px solid var(--border);border-radius:12px;padding:10px 14px;
@@ -403,6 +520,7 @@ button.primary:active{opacity:.85}
       <div class="panel" id="p-hotwords"></div>
       <div class="panel" id="p-history"></div>
       <div class="panel" id="p-import"></div>
+      <div class="panel" id="p-runtime"></div>
     </div>
   </section>
   <div class="restart-bar" id="restartBar">
@@ -418,6 +536,7 @@ const TABS = [
   ["hotwords", "热词", _S + '<path d="M20.59 13.41l-7.17 7.17a2 2 0 0 1-2.83 0L2 12V2h10l8.59 8.59a2 2 0 0 1 0 2.82z"/><line x1="7" y1="7" x2="7.01" y2="7"/></svg>'],
   ["history", "历史记录", _S + '<circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></svg>'],
   ["import", "导入", _S + '<path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><path d="M7 10l5 5 5-5"/><path d="M12 15V3"/></svg>'],
+  ["runtime", "运行环境", _S + '<path d="M12 2v4"/><path d="M12 18v4"/><path d="M4.93 4.93l2.83 2.83"/><path d="M16.24 16.24l2.83 2.83"/><path d="M2 12h4"/><path d="M18 12h4"/><path d="M4.93 19.07l2.83-2.83"/><path d="M16.24 7.76l2.83-2.83"/></svg>'],
 ];
 const nav = document.getElementById('nav');
 TABS.forEach(([id, name, icon]) => {
@@ -789,6 +908,200 @@ document.getElementById('pickBtn').onclick = () => {
     msg.textContent = r.msg; msg.className = 'impmsg' + (r.ok ? '' : ' err');
   }).catch(() => { msg.textContent = '导入失败：桥接未就绪'; msg.className = 'impmsg err'; });
 };
+
+/* —— 运行环境 —— */
+const pr = document.getElementById('p-runtime');
+let RT_STATE = DATA.runtime;                   // 当前运行环境快照；下载完/重扫更新
+const cardByKey = {};                          // key -> DOM 卡片，供轮询更新进度条
+let pollTimer = null;                          // 下载中启轮询；无任务在跑时停
+
+function fmtSize(mb) { return mb >= 1024 ? (mb / 1024).toFixed(2) + ' GB' : mb + ' MB'; }
+function fmtBytes(b) {
+  if (b < 1024) return b + ' B';
+  if (b < 1024*1024) return (b/1024).toFixed(1) + ' KB';
+  if (b < 1024*1024*1024) return (b/1024/1024).toFixed(1) + ' MB';
+  return (b/1024/1024/1024).toFixed(2) + ' GB';
+}
+function fmtRate(bps) { return bps > 0 ? fmtBytes(bps) + '/s' : '—'; }
+
+function renderRuntime(runtime) {
+  RT_STATE = runtime;
+  pr.innerHTML = '';
+  Object.keys(cardByKey).forEach(k => delete cardByKey[k]);
+
+  // 只显示联网下载项（安装包内置的不给用户看，他们不关心也没法操作）
+  const all = [...(runtime.missing || []), ...(runtime.present || [])];
+  const network = all.filter(x => x.network);
+  const localMissing = all.filter(x => !x.network && !x.exists);
+  const networkReady = network.every(x => x.exists);
+
+  // 顶部横条：三态——全就绪 / 正在准备 / 安装包损坏
+  if (localMissing.length) {
+    const banner = document.createElement('div'); banner.className = 'rt-banner warn';
+    banner.innerHTML = '<span class="dot"></span><span></span>';
+    banner.querySelector('span:last-child').textContent =
+      `安装包组件缺失（${localMissing.map(x => x.label).join('、')}），请重装 Typeoff。`;
+    pr.appendChild(banner);
+  } else if (networkReady) {
+    const bar = document.createElement('div'); bar.className = 'rt-restart';
+    const msg = document.createElement('div'); msg.className = 'msg';
+    msg.textContent = '运行环境已就绪，可正常使用。';
+    // 只有 URL 里带 ?just_downloaded 或后端仍在"未就绪进程"里才需要重启；简单起见永远给
+    const btn = document.createElement('button'); btn.textContent = '重启程序';
+    btn.title = '刚下载完模型的话点这里让后台加载';
+    btn.onclick = () => window.pywebview.api.restart().then(r => {
+      toast(r.ok ? {ok: true, msg: '已发出重启信号'} : r);
+    });
+    bar.appendChild(msg); bar.appendChild(btn);
+    pr.appendChild(bar);
+  } else {
+    const banner = document.createElement('div'); banner.className = 'rt-banner info';
+    banner.innerHTML = '<span class="dot"></span><span></span>';
+    banner.querySelector('span:last-child').textContent =
+      '正在准备运行环境，请稍候。下载完成后程序自动重启即可使用。';
+    pr.appendChild(banner);
+  }
+
+  // 只画网络项列表；不显示"安装包内置"分组
+  if (network.length) {
+    const g = document.createElement('div'); g.className = 'rt-group';
+    const h = document.createElement('h3'); h.textContent = '模型文件'; g.appendChild(h);
+    network.forEach(it => { const c = itemCard(it); cardByKey[it.key] = c; g.appendChild(c); });
+    pr.appendChild(g);
+  }
+
+  // 只要还有网络项没就绪，就常驻轮询状态文件；轮询循环里没 running 任务会自动停
+  const anyMissing = network.some(x => !x.exists);
+  if (anyMissing) startPolling();
+}
+
+function itemCard(it) {
+  const card = document.createElement('div'); card.className = 'rt-item';
+  card.dataset.key = it.key;
+  const head = document.createElement('div'); head.className = 'rt-head';
+  const label = document.createElement('span'); label.className = 'label'; label.textContent = it.label;
+  const role = document.createElement('span'); role.className = 'rt-role'; role.textContent = it.role;
+  const size = document.createElement('span'); size.className = 'rt-size'; size.textContent = fmtSize(it.size_mb);
+  head.appendChild(label); head.appendChild(role); head.appendChild(size);
+  card.appendChild(head);
+
+  const note = document.createElement('div'); note.className = 'rt-note'; note.textContent = it.note;
+  card.appendChild(note);
+
+  // 进度条：常驻显示（idle+未下载=空条 0%，running=推进，done=满绿）
+  const dl = document.createElement('div'); dl.className = 'rt-dl show';
+  const bar = document.createElement('div'); bar.className = 'rt-dl-bar';
+  const fill = document.createElement('div'); fill.className = 'rt-dl-fill';
+  bar.appendChild(fill);
+  const meta = document.createElement('div'); meta.className = 'rt-dl-meta';
+  const left = document.createElement('span'); left.className = 'msg';
+  const right = document.createElement('span'); right.className = 'rate';
+  meta.appendChild(left); meta.appendChild(right);
+  dl.appendChild(bar); dl.appendChild(meta);
+  card.appendChild(dl);
+  card._dl = {fill, left, right};
+
+  // 单个状态按钮
+  const acts = document.createElement('div'); acts.className = 'rt-actions';
+  const btn = document.createElement('button');
+  acts.appendChild(btn);
+  card.appendChild(acts);
+  card._btn = btn;
+
+  updateProgress(it.key, null);  // 初始化 UI（idle 态）
+  return card;
+}
+
+function startDownload(key) {
+  window.pywebview.api.download_start(key).then(r => {
+    if (!r.ok) { toast(r); return; }
+    startPolling();
+  }).catch(() => toast({ok: false, msg: '下载启动失败：桥接未就绪'}));
+}
+
+function cancelDownload(key) {
+  window.pywebview.api.download_cancel(key).then(() => startPolling());
+}
+
+function updateProgress(key, task) {
+  const card = cardByKey[key];
+  if (!card) return;
+  const it = findItem(key);
+  if (!it) return;
+
+  const state = (task && task.state) || 'idle';
+  const done = (task && task.done) || 0;
+  const total = (task && task.total) || 0;
+  const pct = total > 0 ? (done / total * 100) : (it.exists ? 100 : 0);
+
+  const {fill, left, right} = card._dl;
+  fill.style.width = pct.toFixed(1) + '%';
+  fill.classList.toggle('err', state === 'error');
+  fill.classList.toggle('done', state === 'done' || it.exists);
+
+  // 文字：done/error/cancelled/running/idle 各一条
+  let msg = '';
+  if (it.exists || state === 'done') {
+    msg = '已完成';
+  } else if (state === 'running') {
+    msg = `下载中 ${fmtBytes(done)} / ${total ? fmtBytes(total) : '?'}  (${pct.toFixed(1)}%)`;
+  } else if (state === 'cancelled') {
+    msg = `已暂停 (${pct.toFixed(1)}%)`;
+  } else if (state === 'error') {
+    msg = '下载失败：' + ((task && task.msg) || '');
+  } else {
+    msg = `未下载 (${fmtSize(it.size_mb)})`;
+  }
+  left.textContent = msg;
+  left.classList.toggle('err', state === 'error');
+  right.textContent = state === 'running' ? fmtRate((task && task.rate) || 0) : '';
+
+  // 单按钮：文案+样式随状态切
+  const btn = card._btn;
+  btn.onclick = null;
+  if (it.exists || state === 'done') {
+    btn.textContent = '已完成'; btn.className = 'ghost'; btn.disabled = true;
+  } else if (state === 'running') {
+    btn.textContent = '暂停'; btn.className = 'ghost'; btn.disabled = false;
+    btn.onclick = () => cancelDownload(key);
+  } else if (state === 'cancelled') {
+    btn.textContent = '继续下载'; btn.className = 'primary'; btn.disabled = false;
+    btn.onclick = () => startDownload(key);
+  } else if (state === 'error') {
+    btn.textContent = '重试'; btn.className = 'primary'; btn.disabled = false;
+    btn.onclick = () => startDownload(key);
+  } else {
+    btn.textContent = '下载'; btn.className = 'primary'; btn.disabled = false;
+    btn.onclick = () => startDownload(key);
+  }
+
+  // 完成后自动重扫，把顶部横条切成"已就绪+重启程序"
+  if (state === 'done' && !it.exists) {
+    window.pywebview.api.runtime_scan().then(r => { if (r.ok) renderRuntime(r.runtime); });
+  }
+}
+
+function findItem(key) {
+  const all = [...(RT_STATE.missing || []), ...(RT_STATE.present || [])];
+  return all.find(x => x.key === key);
+}
+
+function startPolling() {
+  if (pollTimer) return;
+  pollTimer = setInterval(() => {
+    // 所有卡都消失了（=渲染切换到"已就绪"横条）就停轮询
+    if (Object.keys(cardByKey).length === 0) {
+      clearInterval(pollTimer); pollTimer = null;
+      return;
+    }
+    window.pywebview.api.download_progress().then(r => {
+      if (!r || !r.ok) return;
+      const tasks = r.tasks || {};
+      Object.keys(cardByKey).forEach(k => updateProgress(k, tasks[k] || null));
+    }).catch(() => {});
+  }, 700);
+}
+renderRuntime(DATA.runtime);
 
 activate(DATA.tab);
 

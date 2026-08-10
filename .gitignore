@@ -64,3 +64,14 @@ polish_lora/*.bak
 
 # 旧仓库私有历史备份（含 finetune 提交历史，仅供本地翻查，不入公开库）
 .git.private-backup/
+
+# 打包用的干净 venv（本地构建产物，不入库）
+.venv-build/
+build/
+dist/
+installer/output/
+
+# 运行环境下载进度/控制的 IPC 文件（跨进程状态，运行时生成）
+.download_status.json
+.download_status.json.tmp
+.download_control.json

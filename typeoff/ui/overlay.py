@@ -118,6 +118,50 @@ def _get_cat_frames():
 
 import math
 
+
+def _downloading_hint(runtime):
+    """未就绪时的面板文案：把所有网络下载项进度聚合成一句"正在下载模型文件 (X%)"。
+    没提示具体哪个文件——用户不关心 gguf 文件名，只关心什么时候能用。"""
+    try:
+        from typeoff import downloader
+    except Exception:  # noqa: BLE001 兜底：downloader 未导入时静默
+        return "运行环境未就绪。"
+    missing = [m for m in (runtime.get("missing") or []) if m.get("network")]
+    if not missing:
+        # 缺的都是安装包内置项：无法自愈，提示重装
+        return "运行环境组件缺失，请重装 Typeoff。"
+    tasks = downloader.progress()
+    # 按 size_mb 加权聚合进度：大文件更能体现真实完成度
+    total_mb = sum(m.get("size_mb", 1) for m in missing) or 1
+    done_mb = 0.0
+    any_running = False
+    any_error = False
+    any_paused = False
+    for m in missing:
+        t = tasks.get(m["key"], {})
+        state = t.get("state", "idle")
+        size = m.get("size_mb", 1)
+        if state == "done":
+            done_mb += size
+        elif state == "running":
+            any_running = True
+            if t.get("total"):
+                done_mb += size * (t.get("done", 0) / max(1, t.get("total", 1)))
+        elif state == "error":
+            any_error = True
+        elif state == "cancelled":
+            any_paused = True
+    pct = done_mb / total_mb * 100
+    if any_running:
+        return f"正在下载模型文件 ({pct:.1f}%)，请稍候…"
+    if any_error:
+        return f"模型下载失败（{pct:.0f}% 已完成）。右键小圆环 → 主界面 → 运行环境 重试。"
+    if any_paused:
+        return f"模型下载已暂停（{pct:.0f}% 已完成）。右键小圆环 → 主界面 → 运行环境 继续。"
+    # 全部 idle：还没启动（配置无源等边界情况）
+    return "运行环境未就绪：正在准备下载…"
+
+
 # 圆环配色：休眠=冷静蓝呼吸；激活态=固定绿，说话时由浅到深连续呼吸，一段白光沿环扫过。
 # 白流光两端渐隐（无硬起点）。
 _SLEEP_RING_RGB = (90, 170, 255)     # 休眠：冷静的蓝
@@ -336,6 +380,12 @@ def run_overlay(state):
             state.get("rbuf") or state["status"] == "transcribing")
         busy = state.get("llm_busy") or reminder_processing
         warming = state.get("warming")
+        # 运行环境未就绪（后台静默下载中）：视觉等价于"启动初始化中"——圆环纯色不动，猫静止。
+        # 只是面板里的 hint/warn 由下方分支覆盖成下载进度，让用户唤醒后看得懂。
+        runtime = state.get("runtime") or {}
+        not_ready = runtime.get("ready") is False
+        if not_ready:
+            warming = True
         frames = _get_cat_frames()
         cat = None
         if frames:
@@ -411,6 +461,9 @@ def run_overlay(state):
             glass.cancel_edit()
         pbuf = state.get("panel")
         clean, raw, low_conf = pbuf.text_parts if pbuf is not None else ("", "", False)
+        # 运行环境未就绪：面板只显示红色告警，正文/hint 全清空；用户去主界面「运行环境」tab 补齐
+        if not_ready:
+            clean, raw, low_conf = "", "", False
         # 状态提示靠 hint 颜色（蓝灰）跟绿色正文分开；整理状态不区分模式，一律"整理中"
         hint = ""
         dots = "…" * (1 + int(now * 2) % 3)
@@ -437,16 +490,24 @@ def run_overlay(state):
                 warn_text = text
             else:
                 state["warn"] = None  # 到期一次性清掉，别每帧再判
+        # 未就绪时：面板显示后台下载进度（不列文件名，用户不关心具体是哪个 gguf）
+        if not_ready:
+            hint = ""
+            warn_text = _downloading_hint(runtime)
         # 面板锚点由当前窗口位置实时推出（拖动后跟随）：猫左=窗口左 pos_x，猫底=pos_y+TH+D
         glass.update(clean, raw, hint, pos_x - 2, pos_y + TH + D, low_conf=low_conf,
                      warn=warn_text, warm=bool(state.get("warming")))
 
     def open_main():
-        """拉起主界面（圆环右键菜单、托盘左键/菜单共用）。"""
+        """拉起主界面（圆环右键菜单、托盘左键/菜单共用）。
+        运行环境未就绪（下载中）时默认落到"运行环境"tab，让用户看得到进度；否则回默认设置 tab。"""
         import typeoff.ui.main_window as main_window
+        _rt = state.get("runtime") or {}
+        _tab = "runtime" if _rt.get("ready") is False else "settings"
         try:
             main_window.show(CONFIG_PATH, state["history_file"],
-                             state["reminders_log"], state["import_trigger"], state["restart_trigger"])
+                             state["reminders_log"], state["import_trigger"],
+                             state["restart_trigger"], tab=_tab)
         except Exception as e:
             print(f"[warn] 打不开主界面：{e}")
 

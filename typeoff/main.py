@@ -33,6 +33,7 @@ import typeoff.ui.style as ui_style
 from typeoff.config import (DEFAULT_CONFIG, SENTENCE_END, JA_KO_RE,
                              load_config)
 from typeoff.paths import CONFIG_PATH, _resolve
+from typeoff import runtime_check
 from typeoff.hotwords.learn import HotWords
 from typeoff.hotwords.screen import ScreenContext, assemble_context, make_llm_extractor
 from typeoff.reminder.mode import ReminderMode
@@ -43,6 +44,34 @@ from typeoff.audio.capture import Recorder, build_vad, build_keyword_spotter
 
 # 提醒模式下每收一句的简短人声应答（轮换，听着自然），替代听写模式的猫叫
 _REMINDER_CUES = ["嗯", "好的", "嗯哼", "好"]
+
+
+def _close_main_window():
+    """重启前把主窗口子进程一并关掉——它是 subprocess.Popen 出来的独立进程，
+    不会跟着本进程退。找 "Typeoff" 顶层窗口 → 定位 PID → TerminateProcess。
+    找不到就静默跳过（本来就没开）。仅 Windows。"""
+    if os.name != "nt":
+        return
+    try:
+        import ctypes
+        from ctypes import wintypes
+        u = ctypes.windll.user32
+        k = ctypes.windll.kernel32
+        hwnd = u.FindWindowW(None, "Typeoff")
+        if not hwnd:
+            return
+        pid = wintypes.DWORD()
+        u.GetWindowThreadProcessId(hwnd, ctypes.byref(pid))
+        if not pid.value:
+            return
+        PROCESS_TERMINATE = 0x0001
+        h = k.OpenProcess(PROCESS_TERMINATE, False, pid.value)
+        if h:
+            k.TerminateProcess(h, 0)
+            k.CloseHandle(h)
+            print("[info] 已关闭主窗口子进程（重启前）")
+    except Exception as e:  # noqa: BLE001 兜底：关不掉不该拖累重启
+        print(f"[warn] 关闭主窗口失败：{e}")
 
 # 首次唤醒的应答（轮换，别每次都一样）
 _WAKE_CUES = ["我来了", "我在"]
@@ -71,6 +100,13 @@ def main():
     first_run = not CONFIG_PATH.exists()  # 装完后从没生成过配置文件 = 第一次打开
     cfg = load_config()
 
+    # 运行环境检测：任一必需组件缺失（模型未下载/安装包被破坏）就不启动语音后端，
+    # 只拉起悬浮窗+主界面引导用户去「运行环境」tab 补齐；补齐后重启即可（见后面 restart_trigger）。
+    runtime = runtime_check.check(cfg)
+    if not runtime["ready"]:
+        print(f"[warn] 运行环境未就绪，缺失: "
+              f"{[m['label'] for m in runtime['missing']]}")
+
     # 尽早建 state 并拉起悬浮圆环（独立线程）：不等模型/引擎/KWS 都初始化完才有画面——用户这时
     # 说唤醒词还没反应，圆环上会显示"正在初始化"，别让人以为程序卡死了。悬浮窗只靠 state 字典
     # 跟后面的初始化/识别逻辑通信，见 overlay.py。
@@ -81,6 +117,7 @@ def main():
              "tok_in": 0, "tok_out": 0, "tok_time": 0.0,  # 最近一轮提醒 token 用量+时刻，悬浮窗飘字 10s 后淡出
              "levels": [],  # 最近若干帧麦克风音量(RMS)，供说话检测（猫左右张望）
              "backend_ready": False,  # 语音后台是否已开始监听（见下方 recorder.start()）；悬浮窗据此显示"正在初始化"
+             "runtime": runtime,  # 运行环境自检结果：{ready, missing, present}；未就绪时 overlay/panel 显示红色警告并锁输入
              "history_file": _resolve("typed_history"),  # 主界面「历史记录·语音输入」（按天分文件的目录）
              "reminders_log": str(Path(_resolve(cfg["reminders_file"])).with_name("reminders_log.jsonl")),
              "import_trigger": str(CONFIG_PATH.parent / ".import_trigger"),  # GUI 导入把选中路径写这、由本进程接住
@@ -109,8 +146,172 @@ def main():
     if first_run:  # 装完第一次打开：自动拉起主界面，别让用户对着空桌面找不到入口
         print("[info] 首次启动，自动打开主界面。")
         import typeoff.ui.main_window as main_window
+        # 首启若运行环境未就绪，直接落到运行环境 tab；否则默认设置 tab
+        _tab = "runtime" if not runtime["ready"] else "settings"
         main_window.show(CONFIG_PATH, state["history_file"], state["reminders_log"],
-                         state["import_trigger"], state["restart_trigger"])
+                         state["import_trigger"], state["restart_trigger"], tab=_tab)
+
+    # 运行环境未就绪：静默后台下载 + KWS 允许唤醒（唤醒后面板显示下载进度让用户知情），
+    # 但不起 llama-server / worker —— 没模型就没转写。用户说唤醒词后 15s 自动回休眠让圆环
+    # 消失（下载中反正没啥可做）。下载全成功即写 restart_trigger 自我重启换新进程干净起后端。
+    if not runtime["ready"]:
+        from typeoff import downloader
+        network_missing = [m for m in runtime["missing"] if m.get("network")]
+        # 内置项缺失（安装包被破坏）—— 无法自愈，拉主界面让用户重装
+        if any(not m.get("network") for m in runtime["missing"]) or not network_missing:
+            print(f"[warn] 有安装包内置组件缺失，需重装：{[m['label'] for m in runtime['missing'] if not m.get('network')]}")
+            if not first_run:
+                import typeoff.ui.main_window as main_window
+                main_window.show(CONFIG_PATH, state["history_file"], state["reminders_log"],
+                                 state["import_trigger"], state["restart_trigger"], tab="runtime")
+        # 逐项启后台下载（downloader.start 各自开线程，非阻塞）
+        for item in network_missing:
+            urls = item.get("urls") or []
+            if not urls:
+                print(f"[warn] {item['label']} 无下载源，跳过（请填 runtime_check.py 的 _HF_REPO/_MS_REPO）")
+                continue
+            downloader.start(item["key"], urls, Path(item["path"]))
+            print(f"[info] 已启动后台下载：{item['label']}")
+
+        # ── KWS + 麦克风：允许唤醒，唤醒后仅显示下载进度，不转写 ───────────────
+        wake_words_dl = [w for w in cfg.get("wake_words", []) if w.strip()]
+        spotter_dl = build_keyword_spotter(cfg, wake_words_dl) if wake_words_dl else None
+        kws_stream_dl = spotter_dl.create_stream() if spotter_dl is not None else None
+        kws_queue_dl = queue.Queue() if kws_stream_dl is not None else None
+
+        def on_block_dl(block):
+            """PortAudio 回调，只在待唤醒态入 KWS 队列；已唤醒态什么都不做（也不识别）。"""
+            lv = state["levels"]
+            lv.append(float(np.sqrt(np.mean(block ** 2))))
+            if len(lv) > 40:
+                del lv[:-40]
+            if kws_queue_dl is not None and state["mode"] == "sleep":
+                kws_queue_dl.put(block)
+
+        def kws_worker_dl():
+            while not state["quit"]:
+                try:
+                    block = kws_queue_dl.get(timeout=0.5)
+                except queue.Empty:
+                    continue
+                if state["mode"] != "sleep":
+                    continue
+                kws_stream_dl.accept_waveform(cfg["sample_rate"], block)
+                while spotter_dl.is_ready(kws_stream_dl):
+                    spotter_dl.decode_stream(kws_stream_dl)
+                hit = spotter_dl.get_result(kws_stream_dl)
+                if hit:
+                    spotter_dl.reset_stream(kws_stream_dl)
+                    state["mode"] = "awake"
+                    state["status"] = "awake"
+                    state["last_activity"] = time.time()
+                    print("✓ 唤醒（下载中，仅显示进度，不转写）")
+
+        def _dl_idle_watcher():
+            """下载中的休眠倒计时：距上次活动超过 sleep_after_seconds 就回休眠，
+            与就绪态一致（默认 300s，走 cfg["sleep_after_seconds"]）。"""
+            limit = cfg.get("sleep_after_seconds", 300)
+            while not state["quit"]:
+                time.sleep(1)
+                if state["mode"] != "awake":
+                    continue
+                if time.time() - state.get("last_activity", 0) > limit:
+                    state["mode"] = "sleep"
+                    state["status"] = "idle"
+        threading.Thread(target=_dl_idle_watcher, daemon=True).start()
+
+        recorder_dl = None
+        if kws_queue_dl is not None:
+            recorder_dl = Recorder(
+                cfg["sample_rate"],
+                on_segment=lambda seg: None,   # 下载中不收集语音段（不识别）
+                silence_rms=cfg["silence_rms"],
+                silence_seconds=cfg["silence_seconds"],
+                min_segment_seconds=cfg["min_segment_seconds"],
+                max_segment_seconds=cfg.get("max_segment_seconds", 15.0),
+                on_block=on_block_dl,
+                vad=build_vad(cfg),
+                device=cfg.get("input_device") or None,
+            )
+            threading.Thread(target=kws_worker_dl, daemon=True).start()
+            recorder_dl.start()  # 进程退出走消息循环终止 → daemon 线程随退，无需手动 stop
+
+        # ── 与主窗口子进程的文件 IPC ───────────────────────────
+        # 主窗口是独立子进程，看不到本进程的 downloader._TASKS。用两个文件传状态：
+        # 1) .download_status.json：本进程每 1s 覆写，主窗口 API 读取供进度条渲染
+        # 2) .download_control.json：主窗口写触发（暂停/继续），本进程接住调 downloader
+        status_file = CONFIG_PATH.parent / ".download_status.json"
+        control_file = CONFIG_PATH.parent / ".download_control.json"
+        keys_to_items = {m["key"]: m for m in network_missing}
+
+        def _status_writer():
+            while not state["quit"]:
+                try:
+                    payload = {"tasks": downloader.progress(), "ts": time.time()}
+                    tmp = status_file.with_suffix(".json.tmp")
+                    tmp.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
+                    tmp.replace(status_file)  # 原子替换，避免主窗口读到半截 JSON
+                except Exception as e:  # noqa: BLE001 守护线程别被单次异常杀死
+                    print(f"[warn] 写下载状态失败：{e}")
+                time.sleep(1)
+        threading.Thread(target=_status_writer, daemon=True).start()
+
+        def _control_watcher():
+            control_file.unlink(missing_ok=True)  # 清残留
+            while not state["quit"]:
+                try:
+                    if control_file.exists():
+                        data = json.loads(control_file.read_text(encoding="utf-8"))
+                        control_file.unlink(missing_ok=True)
+                        action = data.get("action")
+                        key = data.get("key")
+                        item = keys_to_items.get(key)
+                        if action == "cancel":
+                            downloader.cancel(key)
+                            print(f"[info] 主窗口请求暂停：{key}")
+                        elif action == "start" and item:
+                            downloader.reset(key)  # 上次若 cancelled/error，清 STATE 再重启（.part 保留续传）
+                            downloader.start(key, item.get("urls") or [], Path(item["path"]))
+                            print(f"[info] 主窗口请求下载：{key}")
+                except Exception as e:  # noqa: BLE001
+                    print(f"[warn] 下载控制处理出错：{e}")
+                time.sleep(0.3)
+        threading.Thread(target=_control_watcher, daemon=True).start()
+
+        # 全部下载完成后：写 restart_trigger 让本进程退出+新进程接班（新进程走 ready 分支正常启）
+        def _auto_restart_when_ready():
+            keys = [m["key"] for m in network_missing]
+            while not state["quit"]:
+                time.sleep(2)
+                progress = downloader.progress()
+                # 有任一项没成功（还在跑/失败/取消）就继续等；用户可从主界面手动重试失败项
+                if all(progress.get(k, {}).get("state") == "done" for k in keys):
+                    print("[info] 所有模型下载完成，重启接班…")
+                    Path(state["restart_trigger"]).write_text("1", encoding="utf-8")
+                    return
+        threading.Thread(target=_auto_restart_when_ready, daemon=True).start()
+
+        # restart 触发监视：接住 _auto_restart_when_ready 或用户手动点"重启程序"的信号
+        def _restart_watcher():
+            trigger = Path(state["restart_trigger"])
+            trigger.unlink(missing_ok=True)
+            while not state["quit"]:
+                try:
+                    if trigger.exists():
+                        trigger.unlink(missing_ok=True)
+                        print("[info] 收到重启信号，拉起新进程接班…")
+                        _close_main_window()  # 关掉可能还开着的主窗口子进程，避免遗留旧页面
+                        subprocess.Popen([sys.executable, "-m", "typeoff.main"],
+                                         cwd=str(CONFIG_PATH.parent))
+                        state["quit"] = True
+                except Exception as e:  # noqa: BLE001
+                    print(f"[warn] 重启触发处理出错：{e}")
+                time.sleep(0.5)
+        threading.Thread(target=_restart_watcher, daemon=True).start()
+
+        if overlay_thread is not None:
+            overlay_thread.join()
+        return
 
     # llama.cpp 后端：llama-server 常驻本地(Vulkan GPU)，HTTP 转写，见 asr_llamacpp.py
     from typeoff.asr.llamacpp import LlamaASR
@@ -765,6 +966,7 @@ def main():
                 if trigger.exists():
                     trigger.unlink(missing_ok=True)
                     print("[info] 设置窗口请求重启，拉起新进程接班…")
+                    _close_main_window()  # 关掉可能还开着的主窗口子进程，避免遗留旧页面
                     subprocess.Popen([sys.executable, "-m", "typeoff.main"],
                                      cwd=str(CONFIG_PATH.parent))
                     state["quit"] = True

@@ -1,0 +1,26 @@
+# 运行时依赖（不含 finetune/训练用的 torch 等）。
+# 打包 PyInstaller 前请用干净的 venv 只装本文件；否则会把上 GB 的训练依赖一起打进去。
+#
+#   python -m venv .venv-build
+#   .venv-build\Scripts\activate
+#   pip install -r requirements-runtime.txt
+#
+sounddevice>=0.4.6
+keyboard>=0.13.5
+pyperclip>=1.8.2
+numpy>=1.24,<2.0
+opencc>=1.1.0
+sherpa-onnx>=1.10.0
+pypinyin>=0.50.0
+Pillow>=10.0.0
+uiautomation>=2.0.0
+requests>=2.28.0
+python-docx>=1.0.0
+openpyxl>=3.1.0
+python-pptx>=1.0.0
+rapidocr-onnxruntime>=1.4.0
+edge-tts>=7.0.0
+pywebview>=5.0
+comtypes>=1.2.0
+# 打包工具本身（也算 dev 依赖，但放这里省一个文件）
+pyinstaller>=6.0
