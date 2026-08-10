@@ -15,6 +15,8 @@ _AUMID = "Saymore.VoiceInput"  # 应用身份 ID：不注册的话 Win10/11 弹�
 _NIM_ADD, _NIM_MODIFY, _NIM_DELETE, _NIM_SETVERSION = 0, 1, 2, 4
 _NOTIFYICON_VERSION_4 = 4
 _NIF_MESSAGE, _NIF_ICON, _NIF_TIP, _NIF_INFO = 0x1, 0x2, 0x4, 0x10
+# NOTIFYICON_VERSION_4 默认抑制标准 tooltip,必须显式加 NIF_SHOWTIP 才让鼠标悬停时弹字
+_NIF_SHOWTIP = 0x80
 _NIIF_INFO = 0x1
 _WM_LBUTTONUP, _WM_LBUTTONDBLCLK, _WM_RBUTTONUP = 0x0202, 0x0203, 0x0205
 _IMAGE_ICON, _LR_LOADFROMFILE, _LR_DEFAULTSIZE = 1, 0x10, 0x40
@@ -72,7 +74,7 @@ class TrayIcon:
         nid.cbSize = ctypes.sizeof(_NOTIFYICONDATA)
         nid.hWnd = hwnd
         nid.uID = 1
-        nid.uFlags = _NIF_MESSAGE | _NIF_ICON | _NIF_TIP
+        nid.uFlags = _NIF_MESSAGE | _NIF_ICON | _NIF_TIP | _NIF_SHOWTIP
         nid.uCallbackMessage = MSG
         nid.hIcon = hicon
         nid.szTip = tooltip
@@ -101,13 +103,13 @@ class TrayIcon:
 
     def set_tip(self, tooltip):
         """改悬浮在图标上的 tooltip 文字（不弹气泡，纯被动——鼠标划过去才看得到）。"""
-        self._nid.uFlags = _NIF_MESSAGE | _NIF_ICON | _NIF_TIP
+        self._nid.uFlags = _NIF_MESSAGE | _NIF_ICON | _NIF_TIP | _NIF_SHOWTIP
         self._nid.szTip = tooltip
         self._shell.Shell_NotifyIconW(_NIM_MODIFY, ctypes.byref(self._nid))
 
     def balloon(self, title, msg):
         """从托盘图标弹一个系统气泡通知（Windows 收到后按其通知设置显示几秒/进通知中心）。"""
-        self._nid.uFlags = _NIF_MESSAGE | _NIF_ICON | _NIF_TIP | _NIF_INFO
+        self._nid.uFlags = _NIF_MESSAGE | _NIF_ICON | _NIF_TIP | _NIF_SHOWTIP | _NIF_INFO
         self._nid.szInfo = msg
         self._nid.szInfoTitle = title
         self._nid.dwInfoFlags = _NIIF_INFO
