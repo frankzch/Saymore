@@ -20,6 +20,15 @@ import pyperclip
 
 _FOCUS_READY = False
 
+# 明显不接受文本粘贴的控件类型:焦点落在这些上就不信任,走遍历兜底。
+# 挡"用户随手点在工具栏按钮/菜单上"的常见误判。
+_NON_INPUT_TYPES = {
+    "ButtonControl", "MenuItemControl", "MenuControl", "TabItemControl",
+    "ListItemControl", "TreeItemControl", "ToolBarControl", "StatusBarControl",
+    "CheckBoxControl", "RadioButtonControl", "HyperlinkControl", "ImageControl",
+    "SeparatorControl", "ScrollBarControl", "SliderControl",
+}
+
 # 系统 shell / 桌面 类名，不当作用户窗口
 _SHELL_CLASSES = {
     "Shell_TrayWnd", "Shell_SecondaryTrayWnd", "Progman", "WorkerW",
@@ -54,6 +63,8 @@ def _setup_focus_api():
     u.GetClassNameW.argtypes = [HWND, wintypes.LPWSTR, INT]
     u.GetWindowLongW.argtypes = [HWND, INT]
     u.GetWindowRect.argtypes = [HWND, ctypes.POINTER(wintypes.RECT)]
+    u.GetAncestor.argtypes = [HWND, wintypes.UINT]
+    u.GetAncestor.restype = HWND
     # DWM: 判 UWP 隐藏壳（cloaked），避免把「开始菜单/搜索」这类假顶层选进来
     try:
         ctypes.windll.dwmapi.DwmGetWindowAttribute.argtypes = [HWND, DWORD, P, DWORD]
@@ -87,6 +98,88 @@ def _proc_name(hwnd):
 
 _UIA_COM_INIT = False
 _UIA_CACHE = {"ctrl": None, "key": None}
+
+
+def _ensure_uia():
+    """按需 import + COM 初始化。返回 (auto, ok);ok=False 表示 uiautomation 不可用。"""
+    global _UIA_COM_INIT
+    try:
+        import comtypes
+        import uiautomation as auto
+    except Exception as e:
+        print(f"[warn] 未安装 uiautomation:{e}")
+        return None, False
+    if not _UIA_COM_INIT:
+        try:
+            comtypes.CoInitializeEx()
+        except Exception:
+            pass
+        _UIA_COM_INIT = True
+    return auto, True
+
+
+def _is_editable_ctrl(c, auto):
+    """判「可编辑控件」:经典 Edit/Document/ComboBox 直接算;Group/Custom/Pane 型
+    要 pattern 证实(Electron/网页输入框类型对不上,只有能力对得上)。"""
+    try:
+        if not c.IsKeyboardFocusable:
+            return False
+        t = c.ControlTypeName
+        if t in ("EditControl", "DocumentControl", "ComboBoxControl"):
+            return True
+        if t not in ("GroupControl", "CustomControl", "PaneControl"):
+            return False
+        try:
+            if c.GetPattern(auto.PatternId.TextEditPattern):
+                return True
+        except Exception:
+            pass
+        try:
+            vp = c.GetPattern(auto.PatternId.ValuePattern)
+            if vp and not vp.CurrentIsReadOnly:
+                return True
+        except Exception:
+            pass
+        return False
+    except Exception:
+        return False
+
+
+def _focus_is_own_input():
+    """当前全局键盘焦点是否值得信任(直接原地贴,不去找 Z 序顶层窗口)。
+    关键场景:上面压着悬浮窗(可能是 Saymore 自己的面板,也可能是别的应用),
+    用户光标却在后面某扇窗口的输入框里——只要焦点在,就该用它,别去找 Z 序顶层
+    (会拿到那扇悬浮窗,然后在里面找不到输入框,报"没找到")。
+
+    判定策略(和 _focus_any_input_uia 一致):
+    - 焦点属于 Saymore 自己进程 → 不信任(避免语音面板短暂拿焦点时把文字贴回自己)
+    - 焦点控件是黑名单类型(Button/MenuItem 等明显非输入)→ 不信任,让上层遍历兜底
+    - 其余(含 WPS 正文这种 UIA 认不出的自定义控件)→ 信任
+
+    不再用 _is_editable_ctrl 严检:WPS/Word 正文这类自绘控件三样(类型/pattern/
+    IsKeyboardFocusable)全对不上,却真的能接文本;严检就漏掉。"""
+    auto, ok = _ensure_uia()
+    if not ok:
+        return False
+    try:
+        foc = auto.GetFocusedControl()
+        if foc is None:
+            return False
+        try:
+            if foc.ControlTypeName in _NON_INPUT_TYPES:
+                return False
+        except Exception:
+            pass
+        hwnd = foc.NativeWindowHandle
+        if hwnd:
+            pid = wintypes.DWORD()
+            ctypes.windll.user32.GetWindowThreadProcessId(
+                wintypes.HWND(hwnd), ctypes.byref(pid))
+            if pid.value == os.getpid():
+                return False
+        return True
+    except Exception:
+        return False
 
 
 def _focus_input_uia(hwnd, ctrl_name):
@@ -235,54 +328,82 @@ def _focus_any_input_uia(hwnd):
             pass
         return False
 
-    def field_area(c):
-        """是「非整窗」可输入可聚焦控件则返回其面积，否则返回 -1（非候选）。
-        判据不认类型名，认能力：经典 Edit/Document 直接算；其余容器型（Group/Custom/
-        Pane）须经 pattern 证实可编辑。按钮/列表等一律快速排除，省下 COM 探测开销。"""
+    def _classify(c):
+        """返回 (is_small, area):is_small=True 是「非整窗」小输入框(聊天框/搜索框),
+        False 是「整窗级」可编辑文档容器(WPS/Word/Excel/PPT 主编辑区、整窗文本编辑器);
+        None 表示非候选。判据不认类型名,认能力:经典 Edit/Document 直接算;其余容器型
+        (Group/Custom/Pane)须经 pattern 证实可编辑。按钮/列表等一律快速排除。"""
         try:
             if not c.IsKeyboardFocusable:
-                return -1
+                return None
             t = c.ControlTypeName
             if t in ("EditControl", "DocumentControl", "ComboBoxControl"):
-                pass  # 经典输入型，直接算候选
+                pass  # 经典输入型,直接算候选
             elif t in ("GroupControl", "CustomControl", "PaneControl"):
                 if not _editable_by_pattern(c):
-                    return -1
+                    return None
             else:
-                return -1  # 按钮/列表/图片等非输入型，不必探 pattern
+                return None  # 按钮/列表/图片等非输入型,不必探 pattern
             r = c.BoundingRectangle
             area = max(0, r.right - r.left) * max(0, r.bottom - r.top)
-            # ponytail: 0.7 阈值——占窗 70%+ 视为页面根/整窗编辑器容器，不是要跳转的输入框
-            return -1 if area >= 0.7 * win_area else area
+            # 0.7 阈值:占窗 70%+ 视为整窗级容器(网页页面根 or WPS/Word 主编辑区);
+            # 优先小输入框(聊天框优先于地址栏),都没有再退到整窗文档容器
+            return (True, area) if area < 0.7 * win_area else (False, area)
         except Exception:
-            return -1
+            return None
 
+    # 关键短路:焦点若已经在目标窗口内,原则上一律不动——用户已经点过一次光标,
+    # 信任那个位置。WPS/Word 正文常是 UIA 认不出的自定义控件,靠类型/pattern
+    # 反猜会把文字甩到工具栏字体框那种奇怪地方。
+    # 例外:焦点明摆着是按钮/菜单/列表项等"绝不接受粘贴"的类型,则不信任,走遍历兜底
+    # (挡住"用户随手点在工具栏按钮上"的常见误判)。黑名单见模块级 _NON_INPUT_TYPES。
     try:
         foc = auto.GetFocusedControl()
-        if foc is not None and field_area(foc) >= 0:
-            return True  # 焦点已在一个真正的（非整窗）输入框上，不动
+        if foc is not None:
+            try:
+                is_non_input = foc.ControlTypeName in _NON_INPUT_TYPES
+            except Exception:
+                is_non_input = False
+            if not is_non_input:
+                fh = foc.NativeWindowHandle
+                if fh:
+                    root = ctypes.windll.user32.GetAncestor(wintypes.HWND(int(fh)), 2)  # GA_ROOT
+                    if int(root) == int(hwnd):
+                        return True
+                # 拿不到句柄的兜底:控件被 _classify 认可就算数
+                elif _classify(foc) is not None:
+                    return True
     except Exception:
         pass
 
     win = auto.ControlFromHandle(hwnd)
     if win is None:
         return False
-    best, best_area = None, -1
+    best_small, best_small_area = None, -1
+    best_doc, best_doc_area = None, -1
 
     def walk(c, depth):
-        nonlocal best, best_area
+        nonlocal best_small, best_small_area, best_doc, best_doc_area
         if depth > 40:
             return
         for ch in c.GetChildren():
-            area = field_area(ch)
-            if area > best_area:
-                best, best_area = ch, area
+            cls = _classify(ch)
+            if cls is not None:
+                is_small, area = cls
+                if is_small:
+                    if area > best_small_area:
+                        best_small, best_small_area = ch, area
+                else:
+                    if area > best_doc_area:
+                        best_doc, best_doc_area = ch, area
             walk(ch, depth + 1)
 
-    walk(win, 0)  # ponytail: 全树遍历，panel 模式下仅说「发送/输入」时触发一次，可接受
-    # ceiling: 整窗编辑器里若另有小输入框（如搜索框），可能被误选；主用途是网页聊天框，暂不处理
+    walk(win, 0)  # ponytail: 全树遍历,panel 模式下仅说「发送/输入」时触发一次,可接受
+    # 优先聊天框式的小输入框;都没有再退到整窗文档容器(WPS/Word/Excel/PPT 主编辑区)
+    best = best_small if best_small is not None else best_doc
+    # ceiling: 整窗编辑器里若另有小输入框(如搜索框),可能被误选;主用途是网页聊天框,暂不处理
     if best is None:
-        print("[info] 未在当前窗口找到独立输入框，直接粘贴到当前焦点处")
+        print("[info] 未在当前窗口找到独立输入框,直接粘贴到当前焦点处")
         return False
     try:
         best.SetFocus()
@@ -352,6 +473,10 @@ def focus_window(target, input_name=""):
     返回是否真的聚焦到了一个输入框：调用方（如"发送"命令）据此决定是否粘贴/回车，
     没找到时应提示用户先点进输入框，避免把文字扔到无关焦点（任务栏/桌面）。"""
     _setup_focus_api()
+    # 短路:用户已经把光标点进某个输入框(哪怕它不是 Z 序顶层——比如上方压着悬浮窗),
+    # 就直接用那个,不去找顶层窗口,避免把文字贴错地方。
+    if _focus_is_own_input():
+        return True
     u = ctypes.windll.user32
     fg = _find_topmost_user_window()
     if not fg:
