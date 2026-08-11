@@ -1,10 +1,16 @@
 """窗口焦点定位与文本输出（Win32 + UI Automation）。
 
-把语音识别结果粘到当前前台窗口的输入框：不切换窗口，用 UIA 精确定位
+把语音识别结果粘到当前最上层窗口的输入框：不切换窗口，用 UIA 精确定位
 （Claude 的 Prompt 框）或自动挑面积最大的输入框；另含点掉 CC 权限弹框。
 从 voice_input.py 拆出——纯 Windows API，不依赖主程序状态。
+
+目标窗口选择：不用 GetForegroundWindow（用户点一下任务栏前台就变 shell，
+输入就落空），改成沿 Z 序自顶向下找第一个「真实」窗口——跳过 Saymore
+自己的窗口（overlay/panel/主界面，按 PID 判定，覆盖所有子窗口）、系统
+shell、隐藏/最小化/cloaked 的空壳。
 """
 import ctypes
+import os
 import time
 from ctypes import wintypes
 
@@ -13,6 +19,14 @@ import pyperclip
 
 
 _FOCUS_READY = False
+
+# 系统 shell / 桌面 类名，不当作用户窗口
+_SHELL_CLASSES = {
+    "Shell_TrayWnd", "Shell_SecondaryTrayWnd", "Progman", "WorkerW",
+    "Windows.UI.Core.CoreWindow",  # 开始菜单/搜索等 UWP 壳（通常也 cloaked）
+    "MultitaskingViewFrame", "XamlExplorerHostIslandWindow",
+    "ForegroundStaging", "ApplicationManager_DesktopShellWindow",
+}
 
 
 def _setup_focus_api():
@@ -33,6 +47,18 @@ def _setup_focus_api():
     u.ShowWindow.argtypes = [HWND, INT]
     u.AttachThreadInput.argtypes = [DWORD, DWORD, BOOL]
     u.IsIconic.argtypes = [HWND]
+    u.GetTopWindow.argtypes = [HWND]
+    u.GetTopWindow.restype = HWND
+    u.GetWindow.argtypes = [HWND, wintypes.UINT]
+    u.GetWindow.restype = HWND
+    u.GetClassNameW.argtypes = [HWND, wintypes.LPWSTR, INT]
+    u.GetWindowLongW.argtypes = [HWND, INT]
+    u.GetWindowRect.argtypes = [HWND, ctypes.POINTER(wintypes.RECT)]
+    # DWM: 判 UWP 隐藏壳（cloaked），避免把「开始菜单/搜索」这类假顶层选进来
+    try:
+        ctypes.windll.dwmapi.DwmGetWindowAttribute.argtypes = [HWND, DWORD, P, DWORD]
+    except Exception:
+        pass
     k.GetCurrentThreadId.restype = DWORD
     k.OpenProcess.restype = P
     k.OpenProcess.argtypes = [DWORD, BOOL, DWORD]
@@ -266,16 +292,68 @@ def _focus_any_input_uia(hwnd):
     return True
 
 
+def _is_cloaked(hwnd):
+    """UWP 后台/搜索面板等虽在 Z 序高位，但被 DWM 标为 cloaked（视觉上不可见）。"""
+    try:
+        val = wintypes.DWORD(0)
+        # DWMWA_CLOAKED = 14
+        hr = ctypes.windll.dwmapi.DwmGetWindowAttribute(
+            hwnd, 14, ctypes.byref(val), ctypes.sizeof(val))
+        return hr == 0 and val.value != 0
+    except Exception:
+        return False
+
+
+def _find_topmost_user_window():
+    """沿 Z 序自顶向下找第一个「真实」窗口：排除 Saymore 自己（按 PID，覆盖 overlay/
+    panel/主界面所有子窗口）、系统 shell、隐藏/最小化/cloaked/零面积的空壳。
+    找不到返回 0。"""
+    u = ctypes.windll.user32
+    own_pid = os.getpid()
+    # GetTopWindow(NULL) 返回桌面 Z 序最顶端的顶层窗口；GW_HWNDNEXT=2 沿 Z 序往下
+    hwnd = u.GetTopWindow(None)
+    cls_buf = ctypes.create_unicode_buffer(128)
+    while hwnd:
+        try:
+            if not u.IsWindowVisible(hwnd) or u.IsIconic(hwnd):
+                pass
+            else:
+                # 跳过自己进程的窗口
+                pid = wintypes.DWORD()
+                u.GetWindowThreadProcessId(hwnd, ctypes.byref(pid))
+                if pid.value == own_pid:
+                    pass
+                else:
+                    u.GetClassNameW(hwnd, cls_buf, 128)
+                    if cls_buf.value in _SHELL_CLASSES:
+                        pass
+                    elif _is_cloaked(hwnd):
+                        pass
+                    else:
+                        r = wintypes.RECT()
+                        u.GetWindowRect(hwnd, ctypes.byref(r))
+                        if (r.right - r.left) > 0 and (r.bottom - r.top) > 0:
+                            return hwnd
+        except Exception:
+            pass
+        hwnd = u.GetWindow(hwnd, 2)  # GW_HWNDNEXT
+    return 0
+
+
 def focus_window(target, input_name=""):
-    """把焦点定位到当前前台窗口的输入框（不切换/激活窗口——你在哪个窗口就用哪个，
-    便于在 DeepSeek 等网页里用语音）。前台是配置的目标窗口(如 Claude)且给了 input_name 时，
-    用 UIA 精确定位该控件(Prompt)；否则自动找输入框聚焦。
+    """把焦点定位到当前最上层用户窗口的输入框（不切换/激活窗口——你在哪个窗口就用
+    哪个，便于在 DeepSeek 等网页里用语音）。目标是配置的窗口(如 Claude)且给了
+    input_name 时，用 UIA 精确定位该控件(Prompt)；否则自动找输入框聚焦。
+
+    用 Z 序而非 GetForegroundWindow：用户点一下任务栏前台就变 shell，
+    找不到输入框；Z 序自顶向下，跳过 Saymore 自己的窗口（overlay/面板/主界面）
+    与系统 shell/隐藏壳，拿到用户真正在看的那扇窗。
 
     返回是否真的聚焦到了一个输入框：调用方（如"发送"命令）据此决定是否粘贴/回车，
     没找到时应提示用户先点进输入框，避免把文字扔到无关焦点（任务栏/桌面）。"""
     _setup_focus_api()
     u = ctypes.windll.user32
-    fg = u.GetForegroundWindow()
+    fg = _find_topmost_user_window()
     if not fg:
         return False
     is_target = False
