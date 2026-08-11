@@ -682,7 +682,11 @@ class TextBuffer:
                     self._clean_pending()
                 else:
                     self._full_polish_pending()
-            self._speech_ended_at = None
+            # 只在时间戳没被新 speech-end 更新过时才清零：整理跑 LLM 那几秒里,
+            # 用户又说完一句时 notify_speech_end 会把 _speech_ended_at 更新成新的 T1;
+            # 若无条件清零,这个 T1 被抹掉,末尾几句永远不会再触发整理。
+            if self._speech_ended_at == t:
+                self._speech_ended_at = None
 
     def trigger_polish_now(self):
         """不等 quiet_seconds 倒计时，立即触发一次整理（语音命令"文本整理"用）。"""
@@ -694,16 +698,20 @@ class TextBuffer:
                 has_work = bool(self.clean_text or self.raw_segs)
         if not has_work:
             return
+        t = self._speech_ended_at
         if self.polish_mode == "小范围整理":
             self._clean_pending()
         else:
             self._full_polish_pending()
-        self._speech_ended_at = None
+        if self._speech_ended_at == t:
+            self._speech_ended_at = None
 
     def _full_polish_pending(self):
-        """对全文跑深度/邮件/00后整理，结果 integrate 冻结。整理期间（LLM 调用耗时数秒）
-        若缓存被清空/改动（如说了休眠词触发 clear()），本轮结果作废，避免整理线程收尾时
-        把已清空的缓存又重新写回、面板卡着不消失。"""
+        """对全文跑深度/邮件/00后整理，结果落成 frozen。整理期间（LLM 调用耗时数秒）
+        若用户又说了新句子（追加到 raw_segs 尾部）→ 本轮 LLM 结果对老快照那段仍作数，
+        落成 frozen 就行；尾部新句留在 raw_segs 里等下一轮再整理，别整轮丢弃（否则老句
+        白整理一次、新句也永远不会被处理）。但若 frozen/clean 变了或 raws 头部被动过
+        （undo/clear/replace），说明窗口已失效，本轮结果作废。"""
         if not self.full_polish:
             self._clean_pending()
             return
@@ -723,8 +731,11 @@ class TextBuffer:
                 self.cleaning_mode = None
             if out and out.strip():
                 with self._seg_lock:
-                    if (self.frozen, self.clean_text, self.raw_segs) == (snap_frozen, snap_clean, snap_raws):
-                        self.frozen, self.clean_text, self.clean_conf, self.raw_segs = out.strip(), "", None, []
+                    if (self.frozen == snap_frozen
+                            and self.clean_text == snap_clean
+                            and self.raw_segs[:len(snap_raws)] == snap_raws):
+                        self.frozen, self.clean_text, self.clean_conf = out.strip(), "", None
+                        del self.raw_segs[:len(snap_raws)]
 
     def stop(self):
         self._stop = True
@@ -955,4 +966,36 @@ if __name__ == "__main__":
         time.sleep(0.005)
     assert "深度整理" in b6.frozen, b6.frozen
     assert not b6.raw_segs and not b6.clean_text
+    # 深度整理跑 LLM 那几秒里新到的句子：老快照结果应落成 frozen，新句留在 raw_segs 等下轮
+    slow_gate = threading.Event()
+    def slow_full(text, mode):
+        slow_gate.wait(2.0)
+        return f"【{mode}】{text}", 0.9
+    b7 = TextBuffer(polish=cln, paste=lambda t: None, quiet_seconds=0.01,
+                    polish_mode="深度整理", full_polish=slow_full)
+    b7.add("老句1。")
+    poll = threading.Thread(target=lambda: b7._full_polish_pending(), daemon=True)
+    poll.start()
+    time.sleep(0.05)  # 保证 LLM 调用已开始阻塞
+    b7.add("新句2。"); b7.add("新句3。")  # 整理期间新增
+    slow_gate.set()
+    poll.join(2.0)
+    assert "老句1" in b7.frozen and "新句2" not in b7.frozen, b7.frozen
+    assert b7.raw_segs == ["新句2。", "新句3。"], b7.raw_segs
+    # 倒计时保住：整理返回时若 _speech_ended_at 已被新的 notify 更新，不能抹掉
+    b8 = TextBuffer(polish=cln, paste=lambda t: None, quiet_seconds=0.01,
+                    polish_mode="深度整理", full_polish=fake_full)
+    b8.add("x。"); b8.notify_speech_end()
+    b8._speech_ended_at = time.time() - 1  # 已过 quiet
+    t_before = b8._speech_ended_at
+    # 手动模拟 worker 逻辑，中途更新 _speech_ended_at
+    def racing_full(text, mode):
+        b8._speech_ended_at = time.time()  # 模拟新句 stop
+        return f"【{mode}】{text}", 0.9
+    b8.full_polish = racing_full
+    b8._full_polish_pending()
+    # 模拟 worker 的清零判断
+    if b8._speech_ended_at == t_before:
+        b8._speech_ended_at = None
+    assert b8._speech_ended_at is not None, "新 speech-end 时间戳不能被抹"
     print("panel self-check OK")
