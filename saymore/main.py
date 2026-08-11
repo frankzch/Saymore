@@ -696,10 +696,8 @@ def main():
     def commit_text(text):
         """整理后的整段文字回填输入框，登记回退栈。由 TextBuffer 触发（发送/输入 命令都会走到这）。
         只回填，不写历史文件——历史/热词要等真正「发送」了才算数，见 run_global_command。"""
-        if cfg["append_period"]:
-            stripped = text.strip()
-            if stripped and stripped[-1] not in SENTENCE_END:
-                text = stripped + "。"
+        # 整理结果原样回填,不自动补任何标点——邮件模式落款后面补个句号很丑,
+        # 保守/00后 也没必要每段末尾都硬塞句号,让整理模型自己决定该有什么标点。
         output_text(text, cfg["paste"], focus_title, focus_input)
         hist = state.setdefault("history", [])
         hist.append(text)  # 入栈，供"回退"逐句删除

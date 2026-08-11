@@ -37,7 +37,6 @@ DEFAULT_CONFIG = {
     "min_speech_peak": 0.08,     # 整段峰值低于此值判为背景噪音，直接跳过不识别
     "paste": True,               # True=自动粘贴; False=仅复制到剪贴板
     "simplified": True,          # True=用 OpenCC 把繁体统一转成简体
-    "append_period": True,       # True=句末无结束标点时自动补一个句号
     "local_polish": True,        # True=回填前把攒的话过本地整理模型：走 llama-server+整理 LoRA
     "polish_mode": "小范围整理",  # 默认整理模式：小范围整理/深度整理/邮件整理/00后整理
     "polish_quiet_seconds": 10.0,   # 停止说话后等多久自动触发整理(秒)

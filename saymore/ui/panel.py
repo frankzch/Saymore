@@ -742,8 +742,17 @@ class TextBuffer:
     def flush_all(self):
         """整体回填。返回是否真的发出去了：整块置信度不足时扣下不发、缓存原样留着（等下一轮
         整理或用户重说覆盖），不清空、不悄悄丢内容——调用方据此决定要不要按回车。
-        没内容可发（面板本来就空）也算 True，不算"被拦下"，交给调用方按老规矩处理。"""
-        self._clean_pending()  # 等在跑的整理收尾/把剩余新句并入；通常已就绪，秒过
+        没内容可发（面板本来就空）也算 True，不算"被拦下"，交给调用方按老规矩处理。
+        按当前 polish_mode 决定收尾整理：小范围走 _clean_pending;深度/邮件/00后 走
+        _full_polish_pending——否则倒计时没到就说"发送"会被小范围整理抢先,输出跟设置
+        的风格对不上（例如邮件模式下变成轻度整理）。"""
+        if self.polish_mode == "小范围整理" or not self.full_polish:
+            self._clean_pending()
+        else:
+            with self._seg_lock:
+                has_work = bool(self.raw_segs or self.clean_text)
+            if has_work:
+                self._full_polish_pending()
         with self._seg_lock:
             clean, conf, raws = self.frozen + self.clean_text, self.clean_conf, self.raw_segs
             if not clean and not raws:
