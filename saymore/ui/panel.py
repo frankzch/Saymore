@@ -745,13 +745,15 @@ class TextBuffer:
         没内容可发（面板本来就空）也算 True，不算"被拦下"，交给调用方按老规矩处理。
         按当前 polish_mode 决定收尾整理：小范围走 _clean_pending;深度/邮件/00后 走
         _full_polish_pending——否则倒计时没到就说"发送"会被小范围整理抢先,输出跟设置
-        的风格对不上（例如邮件模式下变成轻度整理）。"""
-        if self.polish_mode == "小范围整理" or not self.full_polish:
-            self._clean_pending()
-        else:
-            with self._seg_lock:
-                has_work = bool(self.raw_segs or self.clean_text)
-            if has_work:
+        的风格对不上（例如邮件模式下变成轻度整理）。
+        只在有未整理新句(raw_segs)时才收尾;整理完用户又手改过的文本(落在 clean_text/frozen)
+        不再重跑整理——用户既然亲手改了,就是最终版,别拿模型再翻一遍把用户改的字盖回去。"""
+        with self._seg_lock:
+            has_raw = bool(self.raw_segs)
+        if has_raw:
+            if self.polish_mode == "小范围整理" or not self.full_polish:
+                self._clean_pending()
+            else:
                 self._full_polish_pending()
         with self._seg_lock:
             clean, conf, raws = self.frozen + self.clean_text, self.clean_conf, self.raw_segs
