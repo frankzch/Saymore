@@ -19,7 +19,7 @@ from pathlib import Path
 # 选项(第 5 项)：select 用它列候选；list 可传 {"single": True} 表示只保留一个方块（如唤醒词）。
 CATEGORIES = [
     ("通用设置", "", [
-        ("autostart", "开机自启", "登录 Windows 时自动在后台启动 Saymore（走任务计划程序，无需管理员）",
+        ("autostart", "开机自启", "登录 Windows 时自动在后台启动 Saymore",
          "bool", None),
         ("input_device", "麦克风", "系统里所有输入设备都在下拉里，选完对着绿条说两句能跳就是选对了；改动重启生效", "mic", None),
         ("device", "计算设备", "语音识别 + 文本整理都用这个跑（同一个本地模型进程）", "select",

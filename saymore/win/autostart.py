@@ -16,7 +16,9 @@ from pathlib import Path
 from saymore.paths import PROJECT_ROOT
 
 RUN_KEY = r"Software\Microsoft\Windows\CurrentVersion\Run"
-VALUE_NAME = "Saymore"
+# 开发版和打包版分开值名,避免同一个 Run 槽被互相覆盖(否则谁最后点"开"谁上岗,
+# 另一份就悄悄失效)。分开后两份在"任务管理器→启动"里各占一行,可独立开关。
+VALUE_NAME = "Saymore" if getattr(sys, "frozen", False) else "Saymore-Dev"
 
 
 def _open_run(write=False):
@@ -36,18 +38,17 @@ def _pythonw_path():
 
 def _desired_command():
     """自启命令行。
-    打包后 sys.executable 就是 Saymore.exe,无参启动即主后端(见 saymore.proc),
-      不能再拼 `-m saymore.main`——PyInstaller bootloader 会无视这些参数。
-    开发时用 pythonw -m saymore.main,并 cmd /c cd 到项目根,以让 config.json、
-      logs/ 等相对路径生效。打包后 Saymore.exe 内部会走 CONFIG_PATH 绝对路径,
-      不需要 cd,直接注册 exe 路径。
+    打包后 sys.executable 就是 Saymore.exe,无参启动即主后端(见 saymore.proc)。
+    开发态用 pythonw + run_saymore.py 直接起,不套 cmd /c 壳——cmd 是控制台程序,
+      Windows 一定给它开黑窗口,而 pythonw 是常驻后端不退,cmd 就永远关不掉,
+      开机就杵一个黑窗。pythonw 本身是 GUI 子系统,没控制台。
+    项目根由 paths.py 从 __file__ 推,不依赖 cwd,所以不需要 cd。
     """
-    root = str(PROJECT_ROOT)
     if getattr(sys, "frozen", False):
         return f'"{sys.executable}"'
     pyw = _pythonw_path()
-    # cmd /c 内部 cd /d 支持切盘符；参数用 " 转义空格
-    return f'cmd /c "cd /d "{root}" && "{pyw}" -m saymore.main"'
+    launcher = PROJECT_ROOT / "run_saymore.py"
+    return f'"{pyw}" "{launcher}"'
 
 
 def is_enabled():

@@ -53,7 +53,7 @@ class _Api:
             return {"ok": False, "msg": "格式不合法，未保存"}
         except Exception as e:  # noqa: BLE001 兜底，别让保存把窗口搞崩
             return {"ok": False, "msg": f"保存失败：{e}"}
-        # autostart 是系统级副作用：写完 config 后同步注册/卸载任务计划
+        # autostart 是系统级副作用：写完 config 后同步注册/卸载 HKCU\...\Run 项
         if payload and "autostart" in payload:
             ok, msg = autostart.set_enabled(bool(payload["autostart"]))
             return {"ok": ok, "msg": msg}
@@ -214,14 +214,44 @@ class _Api:
             w.destroy()
 
 
+_UI_LOCK = None  # 单例互斥量句柄,进程生命周期内必须挂着不释放
+
+
+def _focus_existing_wait(timeout_s: float = 5.0) -> bool:
+    """轮询等一个已有主窗现身并前置。给"另一实例正在建窗但还没显示"的场景兜底。"""
+    if os.name != "nt":
+        return False
+    import time as _t
+    deadline = _t.monotonic() + timeout_s
+    while _t.monotonic() < deadline:
+        if _focus_existing():
+            return True
+        _t.sleep(0.1)
+    return False
+
+
 def _run_gui(config_path, history_dir, reminders_log, import_trigger, restart_trigger, tab):
     """在本进程主线程开原生窗口并阻塞，直到关闭。由 show() 拉起的子进程执行。"""
+    # 单实例守卫:托盘双击/上层重复 spawn 有可能同时拉起多个 UI 子进程,pywebview 建窗
+    # 要几百 ms,窗真正出现前 FindWindowW 查不到,老的 _focus_existing() 挡不住。
+    # 靠命名互斥量从进程侧兜底:已有实例就轮询等它的窗现身、前置,然后本进程退出。
+    # 按 config_path 区分,让开发版和打包版可以各开各的 UI。
+    from saymore.win.single_instance import acquire
+    import hashlib
+    global _UI_LOCK
+    # 不能用内置 hash():PYTHONHASHSEED 随机,两个子进程会得出不同值 → 各自拿到"不同"的锁 → 双开。
+    tag = hashlib.md5(str(Path(config_path).parent).encode("utf-8")).hexdigest()[:12]
+    _UI_LOCK = acquire(f"Saymore.MainWindow.{tag}")
+    if _UI_LOCK is None:
+        _focus_existing_wait(5.0)
+        return
+
     import webview
 
     cfg = json.loads(Path(config_path).read_text(encoding="utf-8"))
     cfg_dir = Path(config_path).parent
-    # 开机自启的真源是系统的任务计划：以它为准覆盖 config 的值，避免用户手动 schtasks
-    # 删掉任务后界面还显示"开"
+    # 开机自启的真源是注册表 HKCU\...\Run 项：以它为准覆盖 config 的值，
+    # 避免用户在任务管理器/设置里关掉后界面仍显示"开"
     cfg["autostart"] = autostart.is_enabled()
     api = _Api(config_path, import_trigger, restart_trigger, history_dir, reminders_log)
     win = webview.create_window(_WIN_TITLE, html=_build_html(cfg, cfg_dir, history_dir, reminders_log, tab),

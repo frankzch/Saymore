@@ -7,6 +7,31 @@
 入口: python -m saymore.main（一般由 start.ps1 拉起）
 """
 
+# 开机自启诊断:在任何可能失败的 import(numpy/keyboard/pywebview 等)之前落一行
+# 到 logs/boot.log,只用 stdlib。目的是分清三档故障:
+#   ① 文件里根本没新增行 → Windows 没执行 Run 命令,或 python 解释器都没起来。
+#   ② 只有 "loaded" 没有 "main() entered" → 后续 import 阶段崩了。
+#   ③ "main() entered" 有,后续 voice_input-YYYY-MM-DD.log 里也有 "启动"
+#       → 走到了正常流程,故障在业务代码里。
+def _boot_marker(stage: str) -> None:
+    import os as _os, sys as _sys, time as _t
+    try:
+        if getattr(_sys, "frozen", False):
+            root = _os.path.dirname(_sys.executable)
+        else:
+            root = _os.path.dirname(_os.path.dirname(_os.path.abspath(__file__)))
+        d = _os.path.join(root, "logs")
+        _os.makedirs(d, exist_ok=True)
+        with open(_os.path.join(d, "boot.log"), "a", encoding="utf-8") as f:
+            ts = _t.strftime("%Y-%m-%d %H:%M:%S")
+            f.write(f"[{ts}] {stage} frozen={getattr(_sys,'frozen',False)} "
+                    f"exe={_sys.executable} argv={_sys.argv}\n")
+    except Exception:
+        pass
+
+
+_boot_marker("main.py module loaded")
+
 import json
 import os
 import queue
@@ -80,7 +105,11 @@ _CMD_ACK_CUES = ["好的", "收到"]
 _HEAR_CUES = ["嗯", "好"]
 
 
+_BACKEND_LOCK = None  # 单例互斥量句柄,进程生命周期内必须挂着不释放
+
+
 def main():
+    _boot_marker("main() entered")
     # pythonw.exe（后台无控制台）下 stdout/stderr 为 None，任何 print 都会崩溃；
     # 重定向到按日切分的日志：logs/voice_input-YYYY-MM-DD.log，每行自动贴 HH:MM:SS.mmm
     # ——现有 print() 免改就带时间戳，便于事后定位哪一步慢。
@@ -88,6 +117,19 @@ def main():
         from saymore.log_setup import install
         install(CONFIG_PATH.parent / "logs")
         print(f"===== 启动 =====")
+
+    # 单实例守卫:两个后端同时跑会抢麦/托盘/config,乱套。命名互斥量按安装路径区分——
+    # 开发版 (D:\Antigravity\...) 和打包版 (D:\Program Files (x86)\Saymore\) 允许并存,
+    # 但同一路径下再启一个就直接退。
+    from saymore.win.single_instance import acquire
+    import hashlib
+    global _BACKEND_LOCK
+    # 不能用内置 hash():PYTHONHASHSEED 随机,两个进程会得出不同值 → 拿不到同一个锁。
+    tag = hashlib.md5(str(CONFIG_PATH.parent).encode("utf-8")).hexdigest()[:12]
+    _BACKEND_LOCK = acquire(f"Saymore.Backend.{tag}")
+    if _BACKEND_LOCK is None:
+        print(f"[info] 已有一个 Saymore 后端在跑({CONFIG_PATH.parent}),本进程退出")
+        sys.exit(0)
 
     if os.name == "nt":  # 必须在本进程建任何窗口之前调用，否则托盘 toast 通知显示来源会是"Python"
         import saymore.ui.tray as tray
