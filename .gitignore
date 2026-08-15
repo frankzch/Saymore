@@ -75,3 +75,11 @@ installer/output/
 .download_status.json
 .download_status.json.tmp
 .download_control.json
+
+# 构建 / 打包 / 微调产物：仅本地开发使用，不公开
+BUILD.md
+build.ps1
+saymore.spec
+requirements-runtime.txt
+run_saymore.py
+installer/
