@@ -70,6 +70,8 @@ DEFAULT_CONFIG = {
     "polish_words": ["文本整理", "立即整理"],
     "sleep_words": ["休眠", "睡觉"],
     "quit_words": ["退出", "关闭程序"],
+    "reminders_file": "reminders.json",  # 提醒数据存储路径（相对 _resolve）
+    "reminder_to_dictation_words": ["听写模式"],
 }
 
 SENTENCE_END = "。！？.!?…~"     # 已以这些标点结尾则不再补句号
