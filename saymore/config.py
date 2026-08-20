@@ -17,7 +17,7 @@ DEFAULT_CONFIG = {
     "sleep_after_seconds": 300,  # 唤醒后静默超过此秒数（默认 5 分钟）进入完整休眠：回到待唤醒并卸载模型释放内存/显存。最后 60s 悬浮窗显示倒计时
     "kws_model_dir": "kws-model",       # sherpa-onnx KWS 模型目录（解压 release 得到，含 *.onnx + tokens.txt）
     "kws_tokens_type": "phone+ppinyin", # 关键词转 token 方式：中英混合模型用 phone+ppinyin；纯中文 wenetspeech 模型用 ppinyin
-    "kws_threshold": 0.18,           # 唤醒灵敏度，越小越易触发（也越易误触）；默认 0.25
+    "kws_threshold": 0.12,           # 唤醒灵敏度，越小越易触发（也越易误触）；0.12 偏远讲，官方默认 0.25
     "llama_server_exe": "llama-cpp/llama-server.exe",  # llama.cpp 预编译 Vulkan 版 llama-server 路径
     "gguf_model": "models/Qwen3-ASR-1.7B-GGUF/Qwen3-ASR-1.7B-IQ4_NL.gguf",       # qwen_gguf: 主模型(LLM 解码器)。IQ4_NL(NormalFloat4)与训练 QLoRA nf4 码本对齐,训推一致
     "gguf_mmproj": "models/Qwen3-ASR-1.7B-GGUF/mmproj-Qwen3-ASR-1.7B-Q8_0.gguf", # qwen_gguf: 音频编码器
@@ -29,12 +29,12 @@ DEFAULT_CONFIG = {
     "sample_rate": 16000,        # 输入采样率（Qwen3-ASR 内部按 16kHz 处理）
     "input_device": "",          # 麦克风：""=系统默认；否则填 sounddevice 里的设备名
     "vad_model": "silero_vad.onnx",  # Silero VAD v5 模型路径（相对脚本目录或绝对）。存在则用 sherpa-onnx VoiceActivityDetector 高级接口切句
-    "vad_threshold": 0.35,       # Silero VAD 概率阈值：>此值视为人声。官方默认 0.5；调低更灵敏（能收远麦/轻声），调高更保守
-    "silence_rms": 0.008,        # 回退方案：VAD 模型缺失时用的 RMS 静音阈值（float32 振幅），低于此视为静音
+    "vad_threshold": 0.25,       # Silero VAD 概率阈值：>此值视为人声。官方默认 0.5；0.25 偏远讲/轻声
+    "silence_rms": 0.004,        # 回退方案：VAD 模型缺失时用的 RMS 静音阈值（float32 振幅），低于此视为静音
     "silence_seconds": 0.5,      # 连续静音超过此时长即切一句，丢给后台转写
     "min_segment_seconds": 0.15, # 一句短于此时长视为误触/碎句，丢弃
     "max_segment_seconds": 15.0, # 一句超过此时长即强制切句
-    "min_speech_peak": 0.04,     # 整段峰值低于此值判为背景噪音，直接跳过不识别（远麦最容易卡这个门）
+    "min_speech_peak": 0.02,     # 整段峰值低于此值判为背景噪音；保留极低底噪过滤，同时接收远麦
     "paste": True,               # True=自动粘贴; False=仅复制到剪贴板
     "simplified": True,          # True=用 OpenCC 把繁体统一转成简体
     "local_polish": True,        # True=回填前把攒的话过本地整理模型：走 llama-server+整理 LoRA
