@@ -85,6 +85,9 @@ Name: "{userdesktop}\{#AppName}";         Filename: "{app}\{#AppExeName}"; Tasks
 Root: HKCU; Subkey: "Software\Microsoft\Windows\CurrentVersion\Run"; ValueType: string; \
     ValueName: "Saymore"; ValueData: """{app}\{#AppExeName}"""; \
     Tasks: autostart; Flags: uninsdeletevalue
+; 用户重新勾选自启时清掉 Windows 留下的禁用状态，否则 Run 项存在也不会启动
+Root: HKCU; Subkey: "Software\Microsoft\Windows\CurrentVersion\Explorer\StartupApproved\Run"; ValueType: none; \
+    ValueName: "Saymore"; Tasks: autostart; Flags: deletevalue
 
 [Run]
 ; 装完可选立即启动

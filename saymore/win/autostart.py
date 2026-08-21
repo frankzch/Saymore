@@ -16,6 +16,9 @@ from pathlib import Path
 from saymore.paths import PROJECT_ROOT
 
 RUN_KEY = r"Software\Microsoft\Windows\CurrentVersion\Run"
+STARTUP_APPROVED_KEY = (
+    r"Software\Microsoft\Windows\CurrentVersion\Explorer\StartupApproved\Run"
+)
 # 开发版和打包版分开值名,避免同一个 Run 槽被互相覆盖(否则谁最后点"开"谁上岗,
 # 另一份就悄悄失效)。分开后两份在"任务管理器→启动"里各占一行,可独立开关。
 VALUE_NAME = "Saymore" if getattr(sys, "frozen", False) else "Saymore-Dev"
@@ -27,6 +30,45 @@ def _open_run(write=False):
     access = winreg.KEY_READ | (winreg.KEY_WRITE if write else 0)
     key = winreg.OpenKey(winreg.HKEY_CURRENT_USER, RUN_KEY, 0, access)
     return winreg, key
+
+
+def _open_startup_approved(write=False):
+    """打开 Windows 启动应用的启用/禁用状态键。"""
+    import winreg
+    access = winreg.KEY_READ | (winreg.KEY_WRITE if write else 0)
+    key = winreg.OpenKey(winreg.HKEY_CURRENT_USER, STARTUP_APPROVED_KEY, 0, access)
+    return winreg, key
+
+
+def _is_startup_approved():
+    """没有状态记录时默认允许；03 表示用户已在 Windows 中禁用。"""
+    try:
+        winreg, key = _open_startup_approved(write=False)
+    except FileNotFoundError:
+        return True
+    try:
+        try:
+            state, _ = winreg.QueryValueEx(key, VALUE_NAME)
+        except FileNotFoundError:
+            return True
+        return not (isinstance(state, bytes) and state[:1] == b"\x03")
+    finally:
+        winreg.CloseKey(key)
+
+
+def _clear_startup_approved():
+    """应用内重新开启时删除 Windows 留下的禁用记录，使 Run 项恢复默认启用。"""
+    try:
+        winreg, key = _open_startup_approved(write=True)
+    except FileNotFoundError:
+        return
+    try:
+        try:
+            winreg.DeleteValue(key, VALUE_NAME)
+        except FileNotFoundError:
+            pass
+    finally:
+        winreg.CloseKey(key)
 
 
 def _pythonw_path():
@@ -52,7 +94,7 @@ def _desired_command():
 
 
 def is_enabled():
-    """Run 项存在即视为启用。"""
+    """Run 项存在且未被 Windows「启动应用」禁用才视为启用。"""
     if os.name != "nt":
         return False
     try:
@@ -61,11 +103,11 @@ def is_enabled():
         return False
     try:
         winreg.QueryValueEx(key, VALUE_NAME)
-        return True
     except FileNotFoundError:
         return False
     finally:
         winreg.CloseKey(key)
+    return _is_startup_approved()
 
 
 def enable():
@@ -78,6 +120,7 @@ def enable():
             winreg.SetValueEx(key, VALUE_NAME, 0, winreg.REG_SZ, _desired_command())
         finally:
             winreg.CloseKey(key)
+        _clear_startup_approved()
         return True, "已开启开机自启（登录时自动后台启动）"
     except Exception as e:  # noqa: BLE001
         return False, f"注册自启失败：{e}"
