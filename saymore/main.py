@@ -104,6 +104,10 @@ _CMD_ACK_CUES = ["好的", "收到"]
 # 每识别出一句普通听写句的即时应答（随机选一个，短，别等整理好——整理太慢）
 _HEAR_CUES = ["嗯", "好"]
 
+# 缓存窗口文本成功发送后，连续空闲 10 秒才在后台切词并加入历史热词；期间重新开口会重置计时。
+# 避开连续听写，同时让刚说过的术语在本次唤醒会话里也能帮助后续内容。
+_HOTWORD_DISTILL_IDLE_SECONDS = 10.0
+
 
 _BACKEND_LOCK = None  # 单例互斥量句柄,进程生命周期内必须挂着不释放
 
@@ -429,8 +433,8 @@ def main():
         else:
             print("[warn] 未安装 opencc，无法转简体（pip install opencc）")
 
-    # 热词自学习：回填即记文本(发送时若在框里改过再补记一条)，休眠时走本地 llama-server(extract 人格)
-    # 切词计频写 hotwords.txt。字数封顶 1500、硬超时 8s（见 hotwords.py），保证单轮 ≤10s。
+    # 热词自学习：真正发送时记最终文本，连续空闲 10 秒后走本地 llama-server(extract 人格)；
+    # 记录最近出现时间和累计次数，双榜名次融合写 hotwords.txt。单轮字数封顶 1500、硬超时 8s。
     hotwords = HotWords(_resolve,
         lambda system, text: llama_asr.extract(text, system, role="extract",
                                                 timeout=8, max_tokens=256))
@@ -860,6 +864,10 @@ def main():
         回到待唤醒并卸载模型释放内存/显存。下次唤醒重新加载（慢几秒）。"""
         while not state["quit"]:
             time.sleep(1)
+            if state["mode"] == "awake" and not state.get("speaking") \
+                    and seg_queue.empty() and state["status"] != "transcribing" \
+                    and time.time() - state["last_activity"] > _HOTWORD_DISTILL_IDLE_SECONDS:
+                hotwords.distill_async()
             # 提醒模式：从「话音落」(last_seg_time，切句时刻)算停顿，超阈值就合并送 LLM。
             # 要求没在说话(speaking)、队列空、且当前没段在识别(status≠transcribing)——
             # 即「已说的都识别完了」才送；识别还没跑完就继续等（不丢句）。

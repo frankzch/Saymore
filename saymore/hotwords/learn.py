@@ -1,9 +1,10 @@
-"""热词自学习：每句口述回填时快照文本，休眠时交给本地 llama-server(extract 人格)
-切词、累计词频，高频词写入 hotwords.txt 喂给 Qwen3-ASR 的 context 偏置。越用识别越准。
+"""热词自学习：每句口述回填时快照文本，空闲时交给本地 llama-server(extract 人格)
+切词；按最近出现时间（2/3）和累计次数（1/3）的名次融合排序，写入 hotwords.txt
+喂给 Qwen3-ASR 的 context 偏置。越新、越常说的词越靠前。
 数据文件（均在脚本目录，不入库）：
   typed_history/YYYY-MM-DD.jsonl  口述文本快照，按天一个文件
-  hotwords.json        各文件已处理行数 done + 全量词频
-  hotwords.txt         频次 Top 词表（一行一词，与 terms.txt 同格式）
+  hotwords.json        各文件已处理行数 done + 每词累计次数和最近出现时间
+  hotwords.txt         融合排序后的 Top 词表（一行一词，与 terms.txt 同格式）
 （旧的单文件 typed_history.jsonl 首次运行时自动按日期拆进目录，改名 .bak 留档）
 """
 import json
@@ -13,10 +14,11 @@ import threading
 import time
 
 TOP_N = 60          # 写进热词文件的词数上限；context 过长会拖慢推理
-MIN_WEIGHT = 3      # 词频达到才算"高频"：一个词说满 3 次入选
 BATCH_CHARS = 1500  # 每轮送本地模型的历史总字数上限（不按行数，用户可能一次口述整篇文章）
 TIMEOUT_SEC = 8     # 单轮硬超时：整个 distill 走完（含 llama-server 调用）必须 ≤10s，超时本轮丢弃 done 不推进
 MAX_TOKENS = 256    # 切词输出的 JSON 数组可能较长（几十个词），比屏幕提词的 32 大得多
+RECENCY_WEIGHT = 2 / 3
+FREQUENCY_WEIGHT = 1 / 3
 
 _SEG_PROMPT = (
     "从下面这些用户输入的句子中提取【专业词汇、技术术语、专有名词、行业用语、"
@@ -48,6 +50,57 @@ def _parse_words(out):
             and _WORD_RE.fullmatch(w.strip())]
 
 
+def _dense_ranks(items, value):
+    """按 value 从大到小给并列值相同名次；返回 {词: 名次}，名次从 1 开始。"""
+    rank_by_value = {
+        current: rank
+        for rank, current in enumerate(
+            sorted({value(word) for word in items}, reverse=True), 1
+        )
+    }
+    return {word: rank_by_value[value(word)] for word in items}
+
+
+def rank_terms(terms, limit=TOP_N):
+    """记录两个榜单名次；时间占 2/3、次数占 1/3，融合后从小到大排序。"""
+    valid = {
+        word: stat for word, stat in terms.items()
+        if isinstance(stat, dict) and int(stat.get("count", 0)) > 0
+    }
+    frequency_rank = _dense_ranks(valid, lambda w: int(valid[w]["count"]))
+    recency_rank = _dense_ranks(valid, lambda w: str(valid[w].get("last_seen", "")))
+    for word, stat in valid.items():
+        stat["recency_rank"] = recency_rank[word]
+        stat["frequency_rank"] = frequency_rank[word]
+        stat["weighted_rank"] = (
+            RECENCY_WEIGHT * recency_rank[word]
+            + FREQUENCY_WEIGHT * frequency_rank[word]
+        )
+    return sorted(
+        valid,
+        key=lambda w: (
+            valid[w]["weighted_rank"],
+            recency_rank[w],
+            -int(valid[w]["count"]),
+            w.casefold(),
+        ),
+    )[:limit]
+
+
+def _update_terms(terms, words, entries):
+    """累计词次，并从原始句中找出每个词最后出现的准确时间。"""
+    fallback_seen = max((str(e.get("t", "")) for e in entries), default="")
+    for word in words:
+        matched = [
+            str(e.get("t", "")) for e in entries
+            if word.casefold() in str(e.get("final", "")).casefold()
+        ]
+        seen = max(matched, default=fallback_seen)
+        stat = terms.setdefault(word, {"count": 0, "last_seen": ""})
+        stat["count"] = int(stat.get("count", 0)) + 1
+        stat["last_seen"] = max(str(stat.get("last_seen", "")), seen)
+
+
 class HotWords:
     def __init__(self, resolve, extract_fn):
         """extract_fn(system, text) -> str：走本地 llama-server extract 人格。
@@ -59,11 +112,22 @@ class HotWords:
         self._lock = threading.Lock()
         self._busy = False
         self._migrate(resolve("typed_history.jsonl"))
+        # 启动时保守地检查一次磁盘历史；之后只有 record() 才重新置脏。
+        self._dirty = self.history_dir.exists()
 
     def _read_state(self):
         if self.state_file.exists():
-            return json.loads(self.state_file.read_text(encoding="utf-8"))
-        return {"done": {}, "counts": {}}
+            state = json.loads(self.state_file.read_text(encoding="utf-8"))
+        else:
+            state = {"done": {}, "terms": {}}
+        # 兼容旧版 {counts: {词: 次数}}；旧数据没有可靠时间，先以空时间垫底，
+        # 此后再次出现时自然更新 last_seen。
+        old_counts = state.pop("counts", {})
+        terms = state.setdefault("terms", {})
+        for word, count in old_counts.items():
+            terms.setdefault(word, {"count": count, "last_seen": ""})
+        state.setdefault("done", {})
+        return state
 
     def _migrate(self, old_file):
         """旧的单文件历史按日期拆进 history_dir，一天一个文件；已提炼进度（旧格式的行 offset）
@@ -106,20 +170,25 @@ class HotWords:
             day_file = self.history_dir / (time.strftime("%Y-%m-%d") + ".jsonl")
             with open(day_file, "a", encoding="utf-8") as f:
                 f.write(row + "\n")
+            self._dirty = True
         print(f"[hotwords] 已记录口述文本 {len(final)} 字")
 
     def distill_async(self):
-        """空闲点（进入休眠）调用：后台把新攒的历史送本地 llama-server 切词并更新热词文件。"""
-        if self._busy or not self.extract_fn or not self.history_dir.exists():
-            return
+        """空闲点调用：后台把新攒的历史送本地 llama-server 切词并更新热词文件。"""
+        with self._lock:
+            if self._busy or not self._dirty or not self.extract_fn or not self.history_dir.exists():
+                return
+            # 先占位并清脏，防 idle_watcher 连续启动重复线程；提炼期间若又 record，
+            # record 会重新置脏，下一轮继续处理。
+            self._busy = True
+            self._dirty = False
         threading.Thread(target=self._distill, daemon=True).start()
 
     def _distill(self):
-        self._busy = True
         try:
             st = self._read_state()
             done = st.setdefault("done", {})
-            st.setdefault("counts", {})
+            st.setdefault("terms", {})
             # 按日期序扫文件，从各自的 done 行数往后累加，字数够 BATCH_CHARS 就停——
             # 不按行数（用户可能一次口述整篇文章）。单条超上限也仍取这一条，防止卡死。
             entries, consumed, chars = [], {}, 0
@@ -152,14 +221,13 @@ class HotWords:
             out = self.extract_fn(_SEG_PROMPT, body)
             words = _parse_words(out)
             if words is None:
-                print(f"[hotwords] LLM 输出无法解析，本轮跳过（下轮重试）: {out[:80]!r}")
+                print(f"[hotwords] LLM 输出无法解析，本轮跳过（有新历史时重试）: {out[:80]!r}")
                 return
-            counts = st["counts"]
-            for w in words:
-                counts[w] = counts.get(w, 0) + 1  # 纯词频，每出现一次 +1
+            terms = st["terms"]
+            _update_terms(terms, words, entries)
             done.update(consumed)
-            top = sorted((w for w, c in counts.items() if c >= MIN_WEIGHT),
-                         key=lambda w: -counts[w])[:TOP_N]
+            # 新词即使只出现一次也入榜：它会凭最新时间靠前；以后不再出现就会自然后移。
+            top = rank_terms(terms)
             # 先写临时文件再原子替换，避免转写线程读到半截
             tmp = str(self.txt_file) + ".tmp"
             with open(tmp, "w", encoding="utf-8") as f:
@@ -167,10 +235,12 @@ class HotWords:
             os.replace(tmp, self.txt_file)
             self.state_file.write_text(
                 json.dumps(st, ensure_ascii=False, indent=0), encoding="utf-8")
-            print(f"[hotwords] 历史切词完成，本轮切出 {len(words)} 词，累计 {len(counts)} 词，"
+            if chars >= BATCH_CHARS:
+                self._dirty = True  # 可能还有下一批；多空跑一次也会自行停下
+            print(f"[hotwords] 历史切词完成，本轮切出 {len(words)} 词，累计 {len(terms)} 词，"
                   f"热词 {len(top)} 个已更新 {self.txt_file.name}，耗时 {time.time() - t0:.1f}s")
         except Exception as e:
-            print(f"[hotwords] 提炼失败，本轮跳过（下轮重试）: {e}")
+            print(f"[hotwords] 提炼失败，本轮跳过（有新历史时重试）: {e}")
         finally:
             self._busy = False
 
@@ -181,11 +251,13 @@ if __name__ == "__main__":
     assert ws == ["语音识别", "热词", "Claude Code"], ws
     assert _parse_words("没有数组") is None
     assert _parse_words('[]') == []
-    # 纯词频：每出现一次 +1
-    counts = {}
-    for w in ["语音识别", "热词", "热词", "热词"]:
-        counts[w] = counts.get(w, 0) + 1
-    assert counts == {"语音识别": 1, "热词": 3}, counts
+    # 双榜名次融合：新近性占 2/3，频次占 1/3；同值共享名次。
+    terms = {
+        "最新一次": {"count": 1, "last_seen": "2026-08-23 10:00:00"},
+        "较新两次": {"count": 2, "last_seen": "2026-08-22 10:00:00"},
+        "很老百次": {"count": 100, "last_seen": "2025-01-01 10:00:00"},
+    }
+    assert rank_terms(terms) == ["最新一次", "较新两次", "很老百次"]
 
     # 迁移：旧单文件按日期拆分、旧 offset 换算成各日 done、旧文件改名 .bak
     import tempfile
@@ -196,12 +268,14 @@ if __name__ == "__main__":
                 for i, d in enumerate([1, 1, 2], 1)]
         (td / "typed_history.jsonl").write_text(
             "\n".join(json.dumps(r, ensure_ascii=False) for r in rows) + "\n", encoding="utf-8")
-        (td / "hotwords.json").write_text('{"offset": 2, "counts": {}}', encoding="utf-8")
+        (td / "hotwords.json").write_text(
+            '{"offset": 2, "counts": {"旧热词": 4}}', encoding="utf-8")
         hw = HotWords(lambda n: td / n, None)
         assert not (td / "typed_history.jsonl").exists() and (td / "typed_history.jsonl.bak").exists()
         assert (td / "typed_history" / "2026-07-01.jsonl").read_text(encoding="utf-8").count("\n") == 2
         st = hw._read_state()
         assert st["done"] == {"2026-07-01.jsonl": 2}, st  # 前 2 行已提炼过，都落在 07-01
+        assert st["terms"]["旧热词"] == {"count": 4, "last_seen": ""}, st
         hw.record("新句子")  # 记到今天的文件
         today = time.strftime("%Y-%m-%d") + ".jsonl"
         tf = td / "typed_history" / today
