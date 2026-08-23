@@ -26,35 +26,85 @@ _OV_SS = 4           # 超采样倍率：先放大 4× 画再缩小，得到抗�
 _OV_FONT = None      # 数字字体（首次渲染惰性加载）
 _CAT_FRAMES = None   # 猫姿势帧缓存（首次渲染惰性加载并预处理）
 _OV_TH = 22          # 悬浮窗顶部 token 飘字条高度(px)；猫位置不变，窗口整体上移这么多
+_OV_RIGHT_GAP = 40   # 默认距主屏工作区右边缘
+_OV_BOTTOM_GAP = 90  # 默认距主屏工作区下边缘
 
 
-def _ov_font():
+def _overlay_position(work_area, offset=None, window_size=None):
+    """按距工作区右下角的偏移计算窗口左上角，并保证窗口仍在工作区内。"""
+    left, top, right, bottom = work_area
+    right_gap, bottom_gap = offset or (_OV_RIGHT_GAP, _OV_BOTTOM_GAP)
+    width, height = window_size or (_OV_D, _OV_D + _OV_TH)
+    x = right - width - int(right_gap)
+    y = bottom - height - int(bottom_gap)
+    return max(left, min(x, right - width)), max(top, min(y, bottom - height))
+
+
+def _dpi_scale(dpi):
+    """把 Windows 显示 DPI 换算成逻辑像素倍率，不根据某个具体分辨率猜尺寸。"""
+    return max(0.75, min(3.0, dpi / 96))
+
+
+def _panel_font_size(configured_px, dpi, system_px):
+    """默认直接采用系统字体实际像素；显式配置时才把逻辑像素按 DPI 换算。"""
+    return system_px if configured_px is None else max(1, round(configured_px * dpi / 96))
+
+
+def _system_message_font_px(user32):
+    """读取 Windows NONCLIENTMETRICS 中已经按当前 DPI 换算好的默认消息字体高度。"""
+    class LOGFONTW(ctypes.Structure):
+        _fields_ = [("lfHeight", wintypes.LONG), ("lfWidth", wintypes.LONG),
+                    ("lfEscapement", wintypes.LONG), ("lfOrientation", wintypes.LONG),
+                    ("lfWeight", wintypes.LONG), ("lfItalic", ctypes.c_ubyte),
+                    ("lfUnderline", ctypes.c_ubyte), ("lfStrikeOut", ctypes.c_ubyte),
+                    ("lfCharSet", ctypes.c_ubyte), ("lfOutPrecision", ctypes.c_ubyte),
+                    ("lfClipPrecision", ctypes.c_ubyte), ("lfQuality", ctypes.c_ubyte),
+                    ("lfPitchAndFamily", ctypes.c_ubyte), ("lfFaceName", ctypes.c_wchar * 32)]
+
+    class NONCLIENTMETRICSW(ctypes.Structure):
+        _fields_ = [("cbSize", wintypes.UINT), ("iBorderWidth", ctypes.c_int),
+                    ("iScrollWidth", ctypes.c_int), ("iScrollHeight", ctypes.c_int),
+                    ("iCaptionWidth", ctypes.c_int), ("iCaptionHeight", ctypes.c_int),
+                    ("lfCaptionFont", LOGFONTW), ("iSmCaptionWidth", ctypes.c_int),
+                    ("iSmCaptionHeight", ctypes.c_int), ("lfSmCaptionFont", LOGFONTW),
+                    ("iMenuWidth", ctypes.c_int), ("iMenuHeight", ctypes.c_int),
+                    ("lfMenuFont", LOGFONTW), ("lfStatusFont", LOGFONTW),
+                    ("lfMessageFont", LOGFONTW), ("iPaddedBorderWidth", ctypes.c_int)]
+
+    metrics = NONCLIENTMETRICSW()
+    metrics.cbSize = ctypes.sizeof(metrics)
+    if user32.SystemParametersInfoW(0x0029, metrics.cbSize, ctypes.byref(metrics), 0):
+        return max(1, abs(metrics.lfMessageFont.lfHeight))
+    return 16
+
+
+def _ov_font(size=13):
     """token 飘字用的小号粗体（惰性加载）：微软雅黑粗体，与 ui_style 主题字体一致
     （中文也有字形，Arial 没有）。都取不到则退回默认字体。"""
     global _OV_FONT
-    if _OV_FONT is None:
+    if _OV_FONT is None or _OV_FONT[0] != size:
         from PIL import ImageFont
         for face in ("msyhbd.ttc", "msyh.ttc", "arialbd.ttf"):
             try:
-                _OV_FONT = ImageFont.truetype(face, 13)
+                _OV_FONT = (size, ImageFont.truetype(face, size))
                 break
             except Exception:
                 continue
         else:
-            _OV_FONT = ImageFont.load_default()
-    return _OV_FONT
+            _OV_FONT = (size, ImageFont.load_default())
+    return _OV_FONT[1]
 
 
-def _draw_tokens(canvas, w, strip_h, tin, tout, fade):
+def _draw_tokens(canvas, w, strip_h, tin, tout, fade, font_size=13):
     """在画布顶部窄带里画 `in/out` token 数字（绿=输入 橙=输出），按 fade(0~1) 整体淡出。"""
     from PIL import ImageDraw
     d = ImageDraw.Draw(canvas)
-    font = _ov_font()
+    font = _ov_font(font_size)
     a = int(255 * fade)
     parts = [(str(tin), (90, 220, 120, a)), ("/", (170, 170, 170, a)), (str(tout), (255, 170, 60, a))]
     widths = [d.textlength(t, font=font) for t, _ in parts]
     x = (w - sum(widths)) / 2
-    y = (strip_h - 13) / 2
+    y = (strip_h - font_size) / 2
     for (t, col), tw in zip(parts, widths):
         d.text((x, y), t, font=font, fill=col)
         x += tw
@@ -221,7 +271,7 @@ def _sweep(img, SD, cx, cy, rc, w, ang, rgb=_SWEEP_RGB, tail=0.8):
 
 
 def _overlay_image(cat=None, ring_rgb=_RING_RGB, glow=0.55, sweep=None, sweep_rgb=_SWEEP_RGB,
-                   sweep_tail=0.8):
+                   sweep_tail=0.8, output_size=None):
     """用 Pillow 超采样渲染一帧悬浮窗，返回逻辑尺寸的 RGBA 图。
     背景透明；猫为主体铺在圆框内，外圈一整圈发光装饰环；sweep(弧度)非空则叠一段绕环流光。"""
     from PIL import Image
@@ -252,7 +302,8 @@ def _overlay_image(cat=None, ring_rgb=_RING_RGB, glow=0.55, sweep=None, sweep_rg
     _ring(img, SD, cx, cy, rc + ring_w / 2, bw, ring_rgb, glow=0.0)
     _ring(img, SD, cx, cy, rc - ring_w / 2, bw, ring_rgb, glow=0.0)
 
-    return img.resize((D, D), Image.LANCZOS)  # 缩回逻辑尺寸 → 抗锯齿
+    output_size = output_size or D
+    return img.resize((output_size, output_size), Image.LANCZOS)  # 缩回显示尺寸 → 抗锯齿
 
 
 def run_overlay(state):
@@ -263,7 +314,16 @@ def run_overlay(state):
     from ctypes import wintypes
 
     u, g = ctypes.windll.user32, ctypes.windll.gdi32
-    D = _OV_D
+    try:
+        u.SetThreadDpiAwarenessContext.restype = ctypes.c_void_p
+        u.SetThreadDpiAwarenessContext.argtypes = [ctypes.c_void_p]
+        u.SetThreadDpiAwarenessContext(ctypes.c_void_p(-4))  # DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2
+        dpi = u.GetDpiForSystem()
+    except (AttributeError, OSError):
+        dpi = 96
+    ui_scale = _dpi_scale(dpi)
+    scaled = lambda px: max(1, round(px * ui_scale))
+    D = scaled(state.get("overlay_size", 72))
 
     class SIZE(ctypes.Structure):
         _fields_ = [("cx", wintypes.LONG), ("cy", wintypes.LONG)]
@@ -311,6 +371,7 @@ def run_overlay(state):
         (u.TrackPopupMenu, INT, [P, UINT, INT, INT, INT, HWND, P]),
         (u.DestroyMenu, INT, [P]),
         (u.GetCursorPos, INT, [P]),
+        (u.SystemParametersInfoW, INT, [UINT, UINT, P, UINT]),
         (u.SetCapture, HWND, [HWND]),
         (u.ReleaseCapture, INT, None),
         (u.SetForegroundWindow, INT, [HWND]),
@@ -322,18 +383,25 @@ def run_overlay(state):
         if args is not None:
             fn.argtypes = args
 
-    sw = u.GetSystemMetrics(0)
-    sh = u.GetSystemMetrics(1)
-    TH = _OV_TH
+    system_font_px = _system_message_font_px(u)
+    TH = scaled(_OV_TH)
     W, H = D, D + TH            # 窗口比控件高 TH，多出的顶部窄带画 token 飘字
-    # 默认摆放：屏幕右下角。窗口左上角＝猫位再上移 TH（顶部飘字带），使猫落在原位。
-    def_x, def_y = sw - D - 40, (sh - D - 90) - TH
-    pos_x, pos_y = def_x, def_y
-    saved = state.get("overlay_pos")          # 上次拖动记住的窗口左上角 [x,y]
-    if isinstance(saved, (list, tuple)) and len(saved) == 2:
-        # 夹到屏幕内，防分辨率/多屏变化后窗口跑到屏幕外点不到
-        pos_x = max(0, min(int(saved[0]), sw - W))
-        pos_y = max(0, min(int(saved[1]), sh - H))
+
+    def get_work_area():
+        """主屏工作区（排除任务栏）；API 失败时退回整块主屏。"""
+        rect = wintypes.RECT()
+        if u.SystemParametersInfoW(0x0030, 0, ctypes.byref(rect), 0):  # SPI_GETWORKAREA
+            return rect.left, rect.top, rect.right, rect.bottom
+        return 0, 0, u.GetSystemMetrics(0), u.GetSystemMetrics(1)
+
+    work_area = get_work_area()
+    saved_offset = state.get("overlay_offset")
+    if not (isinstance(saved_offset, (list, tuple)) and len(saved_offset) == 2):
+        saved_offset = None  # 旧版 overlay_pos 是绝对坐标；显示器变化后失效，迁移为默认右下角。
+    # 定位函数使用基础尺寸；这里按实际缩放后的窗口尺寸修正到同一右下角锚点。
+    right_gap = scaled(saved_offset[0] if saved_offset else _OV_RIGHT_GAP)
+    bottom_gap = scaled(saved_offset[1] if saved_offset else _OV_BOTTOM_GAP)
+    pos_x, pos_y = _overlay_position(work_area, (right_gap, bottom_gap), (W, H))
 
     def blit(target, img, x, y):
         """把 RGBA 图预乘 alpha 后经 UpdateLayeredWindow 逐像素贴到 target 窗口的屏幕 (x,y)。"""
@@ -444,12 +512,14 @@ def run_overlay(state):
         _ring_cur[:] = _lerp_rgb(_ring_cur, target, 0.35)
         ring_rgb = tuple(int(round(c)) for c in _ring_cur)
         img.alpha_composite(_overlay_image(cat, ring_rgb, glow=0.0, sweep=sweep,
-                                           sweep_rgb=sweep_rgb, sweep_tail=sweep_tail), (0, TH))
+                                           sweep_rgb=sweep_rgb, sweep_tail=sweep_tail,
+                                           output_size=D), (0, TH))
         if not busy:
             age = now - state.get("tok_time", 0)
             if state.get("tok_time", 0) and age < 10:       # 最近一轮 token：显示 10s，末 3s 淡出
                 fade = 1.0 if age < 7 else (10 - age) / 3.0
-                _draw_tokens(img, W, TH, state["tok_in"], state["tok_out"], fade)
+                _draw_tokens(img, W, TH, state["tok_in"], state["tok_out"], fade,
+                             max(11, round(system_font_px * 0.8)))
 
         _last_img[0] = img
         blit(hwnd, img, pos_x, pos_y)
@@ -538,20 +608,22 @@ def run_overlay(state):
     _visible = [True]  # 休眠时隐藏悬浮窗只留托盘图标，避免无事可做时还悬着一个圆环
 
     def save_pos(x, y):
-        """把当前窗口左上角写回 config.json 的 overlay_pos，下次启动沿用。读-改-写整份，
-        只在拖动松手这一刻发生（低频），不会与设置窗抢写。"""
-        state["overlay_pos"] = [x, y]
+        """保存窗口距工作区右下角的距离，换显示器/分辨率后仍保持相对位置。"""
+        _, _, right, bottom = work_area
+        offset = [round((right - (x + W)) / ui_scale),
+                  round((bottom - (y + H)) / ui_scale)]
+        state["overlay_offset"] = offset
         try:
             with open(CONFIG_PATH, "r", encoding="utf-8") as fp:
                 cfg = json.load(fp)
-            cfg["overlay_pos"] = [x, y]
+            cfg["overlay_offset"] = offset
             with open(CONFIG_PATH, "w", encoding="utf-8") as fp:
                 json.dump(cfg, fp, ensure_ascii=False, indent=2)
         except Exception as e:
             print(f"[warn] 记住小圆窗位置失败：{e}")
 
     def wndproc(hwnd, msg, wp, lp):
-        nonlocal pos_x, pos_y
+        nonlocal pos_x, pos_y, work_area
         if msg == tray.MSG:      # 托盘图标回调：左键/双击拉起主界面，右键弹菜单
             if _tray[0] is not None:
                 _tray[0].handle(lp)
@@ -580,6 +652,15 @@ def run_overlay(state):
                 u.ReleaseCapture()
                 if (pos_x, pos_y) != (_drag["px"], _drag["py"]):  # 真挪动过才写盘（纯点击不写）
                     save_pos(pos_x, pos_y)
+            return 0
+        if msg in (0x007E, 0x001A):  # WM_DISPLAYCHANGE / WM_SETTINGCHANGE（分辨率、任务栏变化）
+            work_area = get_work_area()
+            offset = state.get("overlay_offset")
+            right_gap = scaled(offset[0] if offset else _OV_RIGHT_GAP)
+            bottom_gap = scaled(offset[1] if offset else _OV_BOTTOM_GAP)
+            pos_x, pos_y = _overlay_position(work_area, (right_gap, bottom_gap), (W, H))
+            if _last_img[0] is not None:
+                blit(hwnd, _last_img[0], pos_x, pos_y)
             return 0
         if msg == 0x0113:        # WM_TIMER
             if state["quit"]:
@@ -654,9 +735,10 @@ def run_overlay(state):
         raw_text_rgb=tuple(gc.get("raw_text_rgb", ui_style.PANEL_RAW_TEXT_RGB)),
         hint_text_rgb=tuple(gc.get("hint_text_rgb", ui_style.PANEL_HINT_TEXT_RGB)),
         low_conf_rgb=tuple(gc.get("low_conf_rgb", ui_style.PANEL_LOW_CONF_RGB)),
-        width=gc.get("width", panel.PANEL_W),
-        font_size=gc.get("font_size", 18),
-        max_h=gc.get("max_h", 480),
+        width=scaled(gc.get("width", panel.PANEL_W)),
+        font_size=_panel_font_size(gc.get("font_size"), dpi, system_font_px),
+        pad=scaled(panel._PAD),
+        max_h=scaled(gc.get("max_h", 480)),
         on_edit_start=on_panel_edit_start,
         on_edit_end=on_panel_edit_end,
     )
@@ -704,4 +786,3 @@ def run_overlay(state):
         u.TranslateMessage(ctypes.byref(msg))
         u.DispatchMessageW(ctypes.byref(msg))
     print("\n退出。")
-

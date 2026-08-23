@@ -198,8 +198,8 @@ class GlassWindow:
             fn.argtypes = args
 
     def _make_font(self, px):
-        """微软雅黑 UI（与 ui_style 主题一致），字号走配置 panel_font_px，嫌大嫌小自己调。
-        400=Regular，CLEARTYPE 平滑。"""
+        """微软雅黑 UI（与 ui_style 主题一致）；默认字号由调用方取 Windows 系统 UI 字体高度，
+        显式 panel_font_px 才覆盖。400=Regular，CLEARTYPE 平滑。"""
         return self.g.CreateFontW(-int(px), 0, 0, 0, 400, 0, 0, 0,
                                   1, 0, 0, 5, 0, "Microsoft YaHei UI")
 

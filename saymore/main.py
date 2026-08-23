@@ -179,7 +179,8 @@ def main():
              "reminders_log": str(Path(_resolve(cfg["reminders_file"])).with_name("reminders_log.jsonl")),
              "import_trigger": str(CONFIG_PATH.parent / ".import_trigger"),  # GUI 导入把选中路径写这、由本进程接住
              "restart_trigger": str(CONFIG_PATH.parent / ".restart_trigger"),  # 设置窗口要求重启生效，写这个文件触发
-             "overlay_pos": cfg.get("overlay_pos"),  # 小圆窗上次拖动位置；overlay 据此摆放并在拖动后写回
+             "overlay_offset": cfg.get("overlay_offset"),  # 距工作区右下角距离；跨分辨率保持相对位置
+             "overlay_size": cfg.get("overlay_size_px", 72),  # 标准逻辑直径；overlay 按显示器 DPI 换算
              "glass_cfg": {  # 玻璃面板外观参数传给 run_overlay（overlay 只依赖 state，不碰 cfg）
                  "tint": cfg.get("panel_tint", ui_style.PANEL_TINT),
                  "text_rgb": cfg.get("panel_text_rgb", ui_style.PANEL_TEXT_RGB),
@@ -187,7 +188,7 @@ def main():
                  "hint_text_rgb": cfg.get("panel_hint_text_rgb", ui_style.PANEL_HINT_TEXT_RGB),
                  "low_conf_rgb": cfg.get("panel_low_conf_rgb", ui_style.PANEL_LOW_CONF_RGB),
                  "width": panel.PANEL_W,
-                 "font_size": cfg.get("panel_font_px", 13),
+                 "font_size": cfg.get("panel_font_px"),
                  "max_h": cfg.get("panel_max_h", 480),
              }}
     # SIGINT(Ctrl+C) 只能在主线程注册；悬浮窗现在跑在独立线程里，不能像以前那样在 run_overlay

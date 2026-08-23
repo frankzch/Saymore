@@ -51,10 +51,11 @@ DEFAULT_CONFIG = {
     "panel_text_rgb": ui_style.PANEL_TEXT_RGB,             # 已整理：绿色
     "panel_raw_text_rgb": ui_style.PANEL_RAW_TEXT_RGB,     # 未整理：黑色
     "panel_hint_text_rgb": ui_style.PANEL_HINT_TEXT_RGB,   # 状态提示：最淡
-    "panel_font_px": 13,
+    "panel_font_px": None,      # None=跟随 Windows 默认 UI 字体；数值=逻辑像素并按当前显示器 DPI 换算
     "panel_max_h": 240,
     "overlay": True,             # True=屏幕显示录音状态小圆点
-    "overlay_pos": None,         # 小圆窗左上角屏幕坐标 [x,y]；拖动后记住位置
+    "overlay_size_px": 72,       # 圆环标准逻辑直径；实际像素随当前显示器 DPI 自动换算
+    "overlay_offset": None,      # 小圆窗距主屏工作区右下角 [右,下]；拖动后记住，换分辨率仍对齐
     # 无云端 LLM 配置：转写/四种整理/屏幕提词/历史热词全部走本地 llama-server + 多 LoRA
     "qwen_context_file": "terms.txt",
     "bias_max_terms": 80,        # 长段偏置词表总上限（不含命令词）；优先级：命令词>屏幕热词>静态术语>历史热词
@@ -96,5 +97,3 @@ def load_config():
     if cfg != on_disk:  # 有缺失的默认项 → 补写回盘（用户值已在 cfg 里保留）
         CONFIG_PATH.write_text(json.dumps(cfg, ensure_ascii=False, indent=2), encoding="utf-8")
     return cfg
-
-
