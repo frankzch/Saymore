@@ -42,6 +42,19 @@ _LOGPIXELSY = 90
 _THUMB_W, _THUMB_INSET, _THUMB_MIN = 4, 6, 24  # 自绘滚动条：宽/距右边缘/最短
 
 
+def _text_bottom_slack(line_h):
+    """给 RichEdit 的末行留出排版余量，避免 DPI 取整后字形下沿被控件裁掉。"""
+    return max(2, round(line_h * 0.15))
+
+
+def _text_area_height(line_count, line_h):
+    return line_count * line_h + _text_bottom_slack(line_h)
+
+
+def _visible_line_count(area_h, line_h):
+    return max(1, (area_h - _text_bottom_slack(line_h)) // line_h)
+
+
 # ---- DWM/Win32 结构体 ----
 class _RECT(ctypes.Structure):
     _fields_ = [("left", wintypes.LONG), ("top", wintypes.LONG),
@@ -465,7 +478,7 @@ class GlassWindow:
         bottom = self.pad + self._status_h + self._warn_h
         track = self.h - bottom - top
         total = self.u.SendMessageW(self.edit, _EM_GETLINECOUNT, 0, 0)
-        visible = max(1, track // self._line_h())
+        visible = _visible_line_count(track, self._line_h())
         if total <= visible:
             return None
         return track, total, visible, max(_THUMB_MIN, track * visible // total)
@@ -550,7 +563,9 @@ class GlassWindow:
         w = self.content_w + self.pad * 2
         if has_body:
             line_cnt = self.u.SendMessageW(self.edit, _EM_GETLINECOUNT, 0, 0)
-            text_h = line_cnt * line_h
+            # RichEdit 的排版矩形在某些 DPI 比 GDI 量出的整行总高多几个取整像素；若精确按
+            # line_cnt * line_h 卡住，最底行（最常见是第二行）的字形下沿会被子窗口裁掉。
+            text_h = _text_area_height(line_cnt, line_h)
             full_h = text_h + self._status_h + self._warn_h + self.pad * 2
             overflow = full_h > self.max_h
             h = self.max_h if overflow else max(full_h, line_h + self._status_h + self._warn_h + self.pad * 2)
@@ -571,7 +586,7 @@ class GlassWindow:
 
         if has_body:
             self.u.SendMessageW(self.edit, _EM_SETSEL, pos, pos)   # 光标收到尾部（不留可见选区）
-            visible_lines = max(1, edit_h // line_h)
+            visible_lines = _visible_line_count(edit_h, line_h)
             scroll_delta = max(0, line_cnt - visible_lines)
             if scroll_delta:
                 self.u.SendMessageW(self.edit, _EM_LINESCROLL, 0, scroll_delta)
