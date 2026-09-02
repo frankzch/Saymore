@@ -157,6 +157,22 @@ def main():
         print(f"[warn] 写 .launch_count 失败(不影响运行): {e}")
     cfg = load_config()
 
+    # 首启探测计算设备:装完第一次(device 还是默认的 auto)自动判断有没有 ≥4GB 独显,
+    # 定成 GPU(cuda)或 CPU 写回 config——让设置界面如实显示已选项(下拉只有 GPU/CPU,
+    # 匹配不上 auto)。只在第一次启动做,之后用户在设置里改就保留。
+    if _launch_n == 0 and cfg.get("device") == "auto":
+        from saymore import gpu_probe
+        _picked = gpu_probe.detect_device()
+        cfg["device"] = _picked
+        try:
+            _cur = json.loads(CONFIG_PATH.read_text(encoding="utf-8"))
+            _cur["device"] = _picked
+            CONFIG_PATH.write_text(json.dumps(_cur, ensure_ascii=False, indent=2),
+                                   encoding="utf-8")
+            print(f"[info] 首启探测计算设备 → {_picked}(已写入 config)")
+        except (OSError, ValueError) as e:
+            print(f"[warn] 写 device 到 config 失败(本次仍按 {_picked} 跑): {e}")
+
     # 运行环境检测：任一必需组件缺失（模型未下载/安装包被破坏）就不启动语音后端，
     # 只拉起悬浮窗+主界面引导用户去「运行环境」tab 补齐；补齐后重启即可（见后面 restart_trigger）。
     runtime = runtime_check.check(cfg)
@@ -390,13 +406,9 @@ def main():
         if _g:
             _loras[_role] = _g
     _dev = cfg.get("device", "auto")
-    if _dev == "auto":
-        try:
-            import ctypes
-            ctypes.WinDLL("vulkan-1.dll")  # 有 GPU 驱动就有这个 DLL；<1ms 探测
-            _dev_resolved = "cuda"
-        except OSError:
-            _dev_resolved = "cpu"
+    if _dev == "auto":  # 兜底:正常首启已在上面解析并写回 concrete,这里只应对手改回 auto 的情况
+        from saymore import gpu_probe
+        _dev_resolved = gpu_probe.detect_device()
         print(f"[info] device=auto → 检测结果: {_dev_resolved}")
     else:
         _dev_resolved = _dev
