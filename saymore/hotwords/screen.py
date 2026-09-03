@@ -19,6 +19,12 @@ import threading
 import time
 
 try:
+    # 先确保 comtypes 缓存目录在:它被 Windows 磁盘清理删掉后 comtypes 不会自己重建,
+    # import uiautomation 写缓存失败会致 UIA 永久加载失败(参见 win/focus.py 同名兜底)。
+    import comtypes.client
+    _gd = getattr(comtypes.client, "gen_dir", None)
+    if _gd:
+        os.makedirs(_gd, exist_ok=True)
     import uiautomation as auto
 except Exception:  # 没装 uiautomation 时整个功能静默关闭，不拖垮主程序
     auto = None

@@ -31,6 +31,14 @@ def _speak_sapi(text):
         comtypes.CoInitialize()
     except Exception:
         pass  # 已初始化过的线程会抛 S_FALSE，忽略
+    # comtypes 生成 SAPI 包装会写 %TEMP%\comtypes_cache\<exe>-<ver>\；该目录被 Windows
+    # 磁盘清理/存储感知删掉后 comtypes 不会自己重建,CreateObject 会失败。用前显式重建兜底。
+    try:
+        _gd = getattr(comtypes.client, "gen_dir", None)
+        if _gd:
+            os.makedirs(_gd, exist_ok=True)
+    except Exception:
+        pass
     voice = comtypes.client.CreateObject("SAPI.SpVoice")
     playing = True
     try:

@@ -18,6 +18,20 @@ import keyboard
 import pyperclip
 
 
+def _ensure_comtypes_gendir():
+    """import uiautomation 会让 comtypes 现生成 UIAutomation 包装并写入
+    %TEMP%\\comtypes_cache\\<exe>-<ver>\\;该目录被 Windows 磁盘清理/存储感知删掉后
+    comtypes 不会自己重建,写缓存失败 → UIAutomationCore.dll 加载失败 → 发送/回退等
+    命令彻底失效(且每次调用都重试刷屏)。每次 import 前显式重建该目录兜底。"""
+    try:
+        import comtypes.client  # import 它才算出 gen_dir,不触发 UIA 包装生成
+        d = getattr(comtypes.client, "gen_dir", None)
+        if d:
+            os.makedirs(d, exist_ok=True)
+    except Exception:
+        pass
+
+
 _FOCUS_READY = False
 
 # 明显不接受文本粘贴的控件类型:焦点落在这些上就不信任,走遍历兜底。
@@ -105,6 +119,7 @@ def _ensure_uia():
     global _UIA_COM_INIT
     try:
         import comtypes
+        _ensure_comtypes_gendir()
         import uiautomation as auto
     except Exception as e:
         print(f"[warn] 未安装 uiautomation:{e}")
@@ -190,6 +205,7 @@ def _focus_input_uia(hwnd, ctrl_name):
     global _UIA_COM_INIT
     try:
         import comtypes
+        _ensure_comtypes_gendir()
         import uiautomation as auto
     except Exception as e:
         print(f"[warn] 未安装 uiautomation，无法精确聚焦输入框：{e}")
@@ -235,6 +251,7 @@ def click_permission_button(win_title):
     global _UIA_COM_INIT
     try:
         import comtypes
+        _ensure_comtypes_gendir()
         import uiautomation as auto
     except Exception as e:
         print(f"[warn] 未安装 uiautomation，无法点击弹框：{e}")
@@ -295,6 +312,7 @@ def _focus_any_input_uia(hwnd):
     global _UIA_COM_INIT
     try:
         import comtypes
+        _ensure_comtypes_gendir()
         import uiautomation as auto
     except Exception as e:
         print(f"[warn] 未安装 uiautomation，无法定位输入框：{e}")
