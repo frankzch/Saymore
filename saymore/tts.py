@@ -111,32 +111,52 @@ def _speedup_mp3(src, dst, tempo):
         return False
 
 
+def _ensure_cue(text):
+    """确保 text 的提示语 mp3 已缓存在盘上，返回路径；合成失败返回 None。
+    调用方必须已持有 _lock（合成会走网络+ffmpeg，不能两个线程同时写同一个文件）。"""
+    import hashlib
+    key = hashlib.md5(f"{_VOICE}:{_CUE_TEMPO}:{text}".encode("utf-8")).hexdigest()
+    path = os.path.join(_cue_dir, key + ".mp3")
+    if os.path.exists(path) and os.path.getsize(path) > 0:
+        return path
+    try:
+        import edge_tts
+        os.makedirs(_cue_dir, exist_ok=True)
+        raw = path + ".raw.mp3"
+        asyncio.run(edge_tts.Communicate(text, _VOICE).save(raw))
+        if os.path.getsize(raw) == 0:
+            raise RuntimeError("edge-tts 返回空音频")
+        if not _speedup_mp3(raw, path, _CUE_TEMPO):
+            os.replace(raw, path)  # 没有 ffmpeg：原样用原速文件，保证音色正常
+        else:
+            os.remove(raw)
+        return path
+    except Exception as e:
+        print(f"[tts] cue 合成失败：{e}")
+        return None
+
+
+def prefetch_cue(text):
+    """后台预合成一句提示语，不播放。缓存目录在 %TEMP%，重启后会被清掉——
+    启动时先把要紧的提示语（如冷启动唤醒提示）合出来，免得首次要用时干等三秒网络合成。"""
+    text = (text or "").strip()
+    if not text:
+        return
+    with _lock:
+        _ensure_cue(text)
+
+
 def play_cue(text):
     """播放一个固定的短提示语（如"嗯"/"好的"）。首次合成后缓存到本地，之后直接放缓存，
     避免每说一句都走一次网络合成而拖慢即时反馈。合成失败回退 SAPI。"""
     text = (text or "").strip()
     if not text:
         return
-    import hashlib
-    key = hashlib.md5(f"{_VOICE}:{_CUE_TEMPO}:{text}".encode("utf-8")).hexdigest()
-    path = os.path.join(_cue_dir, key + ".mp3")
     with _lock:
-        if not (os.path.exists(path) and os.path.getsize(path) > 0):
-            try:
-                import edge_tts
-                os.makedirs(_cue_dir, exist_ok=True)
-                raw = path + ".raw.mp3"
-                asyncio.run(edge_tts.Communicate(text, _VOICE).save(raw))
-                if os.path.getsize(raw) == 0:
-                    raise RuntimeError("edge-tts 返回空音频")
-                if not _speedup_mp3(raw, path, _CUE_TEMPO):
-                    os.replace(raw, path)  # 没有 ffmpeg：原样用原速文件，保证音色正常
-                else:
-                    os.remove(raw)
-            except Exception as e:
-                print(f"[tts] cue 合成失败，回退 SAPI：{e}")
-                _speak_sapi(text)
-                return
+        path = _ensure_cue(text)
+        if path is None:
+            _speak_sapi(text)
+            return
         _play_mp3(path)
 
 

@@ -99,6 +99,9 @@ def _close_main_window():
 
 # 首次唤醒的应答（轮换，别每次都一样）
 _WAKE_CUES = ["我来了", "我在"]
+# 冷启动唤醒（llama-server 没在跑，得现拉起来加载模型）时改播这句：不少人以为唤醒了就能说，
+# 结果这几秒说的全被丢弃。用语音明确让他们等圆环上的倒计时走完。热唤醒仍只播上面的短应答。
+_COLD_WAKE_CUE = "正在启动中，加载模型大概需要几秒钟的时间。请在倒计时结束后开始说话。"
 # 听写模式下识别到命令词（发送/输入/回退等）的简短应答（轮换）
 _CMD_ACK_CUES = ["好的", "收到"]
 # 每识别出一句普通听写句的即时应答（随机选一个，短，别等整理好——整理太慢）
@@ -431,11 +434,13 @@ def main():
             _t = time.time()
             llama_asr.start()
             print(f"llama-server 就绪 ({time.time()-_t:.1f}s)。")
+        state["asr_loaded"] = True
         return llama_asr
     def unload_model():
         if llama_asr.alive():  # 按"是否活着"判,复用来的 server(proc=None)休眠也要放显存
             llama_asr.stop()
             print("🗑 长时间休眠，已停 llama-server 释放显存。")
+        state["asr_loaded"] = False
 
     warm_model = load_model
 
@@ -507,6 +512,16 @@ def main():
         print("[warn] KWS 未就绪，无法语音唤醒；请检查 kws_model_dir / 安装 sherpa-onnx。")
     print(f"待唤醒中…说出唤醒词之一即可开始：{wake_words}（听写时说「提醒/命令」进提醒模式）")
     print(f"（唤醒后正常说话即转写输入；静默 {cfg['sleep_after_seconds']}s 后完整休眠。Ctrl+Shift+Q 退出）")
+
+    def _prewarm_wake_cue():
+        """开机后第一次唤醒的两件准备，都放后台（各要 1~2s，不能挡启动）：
+        ① 提示语缓存在 %TEMP%，重启就没了；冷启动那句最长、现合成要 ~2s，先合出来，
+           免得第一次唤醒干等着才出声、用户早开口了。
+        ② 探一次 llama-server：上一轮遗留的 server 会被复用，那种情况唤醒是秒开，
+           别误播"正在启动中"。之后这个旗标由 load/unload 自己维护，唤醒路径零成本。"""
+        tts.prefetch_cue(_COLD_WAKE_CUE)
+        state["asr_loaded"] = llama_asr.alive()
+    threading.Thread(target=_prewarm_wake_cue, daemon=True).start()
 
     seg_queue = queue.Queue()
     # 屏幕热词后台扫描：唤醒态 + 距上次说话空闲 >7s 才提词——正说话时不扫，免得提词请求
@@ -958,15 +973,25 @@ def main():
                 print("✓ 已唤醒，开始聆听…")
                 state["warming"] = True  # 引擎冷启动中：圆环显示"正在初始化"，期间说的话直接丢弃不转写
                 state["warming_start"] = time.time()
+                # 冷热读旗标而不是现探 llama_asr.alive()：服务没起时那次探测要耗满 2s 超时
+                # （本机 loopback 对未监听端口是丢包，不是秒回拒连），排在应答前面就成了 2 秒静默。
+                cold = not state.get("asr_loaded")
+                threading.Thread(target=_wake_cue, args=(cold,), daemon=True).start()
                 def _warm_then_ready():
                     try:
                         warm_model()
                     finally:
                         state["warming"] = False
                 threading.Thread(target=_warm_then_ready, daemon=True).start()
-                i = state.get("wake_cue_i", 0)
-                state["wake_cue_i"] = i + 1
-                threading.Thread(target=tts.play_cue, args=(_WAKE_CUES[i % len(_WAKE_CUES)],), daemon=True).start()
+
+    def _wake_cue(cold):
+        """唤醒应答：冷启动播"别急着说"的长提示，热唤醒播轮换的短应答。"""
+        if cold:
+            tts.play_cue(_COLD_WAKE_CUE)
+            return
+        i = state.get("wake_cue_i", 0)
+        state["wake_cue_i"] = i + 1
+        tts.play_cue(_WAKE_CUES[i % len(_WAKE_CUES)])
 
     def on_segment_cut(seg):
         """切句（话音落+静音确认）回调，PortAudio 线程：标记说完、记话音落时刻并入队。
