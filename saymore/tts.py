@@ -91,6 +91,7 @@ _cue_dir = os.path.join(tempfile.gettempdir(), "voiceinput_cues")
 
 # 短提示语变速倍数：ffmpeg atempo 只变速不变调（MCI 原生变速会变调，听着像捏着嗓子说话，弃用）。
 # 装了 ffmpeg 才会加速；没装就原速播放（慢但音色正常，优先保证不失真）。
+# 短应答("我来了")要干脆，所以提速；长提示语另按 play_cue(tempo=) 放慢，见 main.py 冷启动提示。
 _CUE_TEMPO = 1.4
 
 
@@ -111,11 +112,11 @@ def _speedup_mp3(src, dst, tempo):
         return False
 
 
-def _ensure_cue(text):
+def _ensure_cue(text, tempo=_CUE_TEMPO):
     """确保 text 的提示语 mp3 已缓存在盘上，返回路径；合成失败返回 None。
     调用方必须已持有 _lock（合成会走网络+ffmpeg，不能两个线程同时写同一个文件）。"""
     import hashlib
-    key = hashlib.md5(f"{_VOICE}:{_CUE_TEMPO}:{text}".encode("utf-8")).hexdigest()
+    key = hashlib.md5(f"{_VOICE}:{tempo}:{text}".encode("utf-8")).hexdigest()
     path = os.path.join(_cue_dir, key + ".mp3")
     if os.path.exists(path) and os.path.getsize(path) > 0:
         return path
@@ -126,7 +127,7 @@ def _ensure_cue(text):
         asyncio.run(edge_tts.Communicate(text, _VOICE).save(raw))
         if os.path.getsize(raw) == 0:
             raise RuntimeError("edge-tts 返回空音频")
-        if not _speedup_mp3(raw, path, _CUE_TEMPO):
+        if not _speedup_mp3(raw, path, tempo):
             os.replace(raw, path)  # 没有 ffmpeg：原样用原速文件，保证音色正常
         else:
             os.remove(raw)
@@ -136,24 +137,25 @@ def _ensure_cue(text):
         return None
 
 
-def prefetch_cue(text):
+def prefetch_cue(text, tempo=_CUE_TEMPO):
     """后台预合成一句提示语，不播放。缓存目录在 %TEMP%，重启后会被清掉——
-    启动时先把要紧的提示语（如冷启动唤醒提示）合出来，免得首次要用时干等三秒网络合成。"""
+    启动时先把要紧的提示语（如冷启动唤醒提示）合出来，免得首次要用时干等三秒网络合成。
+    tempo 要跟之后 play_cue 的传值一致，否则缓存键对不上、等于没预热。"""
     text = (text or "").strip()
     if not text:
         return
     with _lock:
-        _ensure_cue(text)
+        _ensure_cue(text, tempo)
 
 
-def play_cue(text):
+def play_cue(text, tempo=_CUE_TEMPO):
     """播放一个固定的短提示语（如"嗯"/"好的"）。首次合成后缓存到本地，之后直接放缓存，
     避免每说一句都走一次网络合成而拖慢即时反馈。合成失败回退 SAPI。"""
     text = (text or "").strip()
     if not text:
         return
     with _lock:
-        path = _ensure_cue(text)
+        path = _ensure_cue(text, tempo)
         if path is None:
             _speak_sapi(text)
             return

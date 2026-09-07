@@ -102,6 +102,9 @@ _WAKE_CUES = ["我来了", "我在"]
 # 冷启动唤醒（llama-server 没在跑，得现拉起来加载模型）时改播这句：不少人以为唤醒了就能说，
 # 结果这几秒说的全被丢弃。用语音明确让他们等圆环上的倒计时走完。热唤醒仍只播上面的短应答。
 _COLD_WAKE_CUE = "正在启动中，加载模型大概需要几秒钟的时间。请在倒计时结束后开始说话。"
+# 这句用原速 = 7.8s，在圆环那个 10s 倒计时归零前说完还留两秒余量。
+# 再放慢能贴满倒计时，但听着拖沓，不值当（短应答另用默认 1.4 倍速，要的是干脆）。
+_COLD_CUE_TEMPO = 1.0
 # 听写模式下识别到命令词（发送/输入/回退等）的简短应答（轮换）
 _CMD_ACK_CUES = ["好的", "收到"]
 # 每识别出一句普通听写句的即时应答（随机选一个，短，别等整理好——整理太慢）
@@ -519,7 +522,7 @@ def main():
            免得第一次唤醒干等着才出声、用户早开口了。
         ② 探一次 llama-server：上一轮遗留的 server 会被复用，那种情况唤醒是秒开，
            别误播"正在启动中"。之后这个旗标由 load/unload 自己维护，唤醒路径零成本。"""
-        tts.prefetch_cue(_COLD_WAKE_CUE)
+        tts.prefetch_cue(_COLD_WAKE_CUE, _COLD_CUE_TEMPO)
         state["asr_loaded"] = llama_asr.alive()
     threading.Thread(target=_prewarm_wake_cue, daemon=True).start()
 
@@ -987,7 +990,7 @@ def main():
     def _wake_cue(cold):
         """唤醒应答：冷启动播"别急着说"的长提示，热唤醒播轮换的短应答。"""
         if cold:
-            tts.play_cue(_COLD_WAKE_CUE)
+            tts.play_cue(_COLD_WAKE_CUE, _COLD_CUE_TEMPO)
             return
         i = state.get("wake_cue_i", 0)
         state["wake_cue_i"] = i + 1
