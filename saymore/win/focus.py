@@ -527,7 +527,9 @@ def output_text(text, paste, focus_title=None, focus_input=""):
         old = pyperclip.paste()
     except Exception:
         pass
-    pyperclip.copy(text)
+    # Windows 剪贴板文本约定用 CRLF:经典 Edit/RichEdit 控件(记事本/微信/WPS/Office)
+    # 只认 \r\n,裸 \n 不换行,整理出的分段会被拍平成一坨。先归一再转,避免 \r\r\n。
+    pyperclip.copy(text.replace("\r\n", "\n").replace("\n", "\r\n"))
     time.sleep(0.05)
     keyboard.send("ctrl+v")
     print(f"[done] {text}")
