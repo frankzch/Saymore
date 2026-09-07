@@ -2,7 +2,8 @@
 """右下角玻璃文字面板：识别句全部攒进缓冲、显示在半透明磨砂窗口里，不立刻粘贴，
 只有用户显式说"发送"才整体回填输入框——其余任何情况（攒多少字、静默多久、进休眠）
 都不自动回填，全留在缓存里等指令。用户停止说话后等 quiet_seconds 秒自动按所选模式
-整理一次（小范围走滑动窗口，深度/邮件/00后 对全文跑一次并冻结）。
+整理一次（小范围走滑动窗口，深度/邮件/00后 对全文跑一次并冻结）；发送/说"文本整理"
+收尾时一律对全文再跑一次（含小范围），否则滑动窗口的小视野让语义分段永远无从发生。
 
 - TextBuffer：停说后自动整理 + 仅发送/flush_all 时回填。可单测。
 - GlassWindow：Win32 无边框分层窗口（WS_EX_LAYERED 整窗统一半透）+ 圆角，里面嵌一个
@@ -613,7 +614,8 @@ class TextBuffer:
     """未回填识别文字的缓冲，窗口分三段：frozen（已定稿、不再重整理的头部）+ clean_text
     （最近 context_chars 字的活跃窗口，已整理但仍随新句重整理）+ raw_segs（还没并入整理
     结果的新句）。用户停止说话后等 quiet_seconds 秒再触发整理（小范围走滑动窗口，
-    深度/邮件/00后 对全文跑一次并冻结）。只有发送/flush_all 才整体回填输入框——
+    深度/邮件/00后 对全文跑一次并冻结）；收尾（flush_all / trigger_polish_now）则一律
+    对全文跑一次。只有发送/flush_all 才整体回填输入框——
     攒多少字、静默多久都不自动回填。
     整理(polish: str->str)与回填(paste: str->None)由外部注入，本类不碰模型/剪贴板。"""
 
@@ -639,6 +641,9 @@ class TextBuffer:
         self.cleaning_mode = None       # 后台正在跑的整理模式；None=没在整理。供面板显示"XX中…"
         self._paused = False            # 面板编辑中：True 时跳过自动整理触发，避免和用户手改的字打架
         self._edit_needs_polish = False  # 进入编辑态时是否还有未整理内容（倒计时没走完），决定保存后要不要接着整理
+        self._needs_full_polish = False  # 自上次全文整理以来有过新内容？决定收尾要不要跑一次全文
+        # ↑ 不能用 raw_segs 代替：小范围模式下静默倒计时的滑动窗口会先把 raw_segs 吃光，
+        #   到"发送"时看 raw_segs 就永远是空的，收尾全文整理一次都不会跑。
         self._seg_lock = threading.Lock()
         self._commit_lock = threading.Lock()
         self._clean_lock = threading.Lock()
@@ -704,20 +709,17 @@ class TextBuffer:
                 self._speech_ended_at = None
 
     def trigger_polish_now(self):
-        """不等 quiet_seconds 倒计时，立即触发一次整理（语音命令"文本整理"用）。"""
+        """不等 quiet_seconds 倒计时，立即触发一次整理（语音命令"文本整理"用）。
+        一律走全文（含小范围）：分段是全局判断，滑动窗口每次只看得到 <=context_chars 字的
+        一小片，话题切换根本落不进视野，模型永远不会分段。"""
         if self.immediate or self._paused:
             return
-        has_work = bool(self.raw_segs)
-        if not has_work and self.polish_mode != "小范围整理":
-            with self._seg_lock:
-                has_work = bool(self.clean_text or self.raw_segs)
+        with self._seg_lock:
+            has_work = self._needs_full_polish and bool(self.clean_text or self.raw_segs or self.frozen)
         if not has_work:
             return
         t = self._speech_ended_at
-        if self.polish_mode == "小范围整理":
-            self._clean_pending()
-        else:
-            self._full_polish_pending()
+        self._full_polish_pending()
         if self._speech_ended_at == t:
             self._speech_ended_at = None
 
@@ -751,6 +753,8 @@ class TextBuffer:
                             and self.raw_segs[:len(snap_raws)] == snap_raws):
                         self.frozen, self.clean_text, self.clean_conf = out.strip(), "", None
                         del self.raw_segs[:len(snap_raws)]
+                        # 整理期间又说的新句还留在尾部，那部分没进这轮全文，标志得留着
+                        self._needs_full_polish = bool(self.raw_segs)
 
     def stop(self):
         self._stop = True
@@ -764,23 +768,22 @@ class TextBuffer:
             return
         with self._seg_lock:
             self.raw_segs.append(text)  # 只攒不回填、不挤出；整理交给后台定时线程
+            self._needs_full_polish = True
 
     def flush_all(self):
         """整体回填。返回是否真的发出去了：整块置信度不足时扣下不发、缓存原样留着（等下一轮
         整理或用户重说覆盖），不清空、不悄悄丢内容——调用方据此决定要不要按回车。
         没内容可发（面板本来就空）也算 True，不算"被拦下"，交给调用方按老规矩处理。
-        按当前 polish_mode 决定收尾整理：小范围走 _clean_pending;深度/邮件/00后 走
-        _full_polish_pending——否则倒计时没到就说"发送"会被小范围整理抢先,输出跟设置
-        的风格对不上（例如邮件模式下变成轻度整理）。
-        只在有未整理新句(raw_segs)时才收尾;整理完用户又手改过的文本(落在 clean_text/frozen)
+        收尾一律走 _full_polish_pending（含小范围）：一来倒计时没到就说"发送"不会被小范围
+        整理抢先、输出跟设置的风格对不上（例如邮件模式下变成轻度整理）;二来分段是全局判断,
+        滑动窗口每次只看得到 <=context_chars 字的一小片、话题切换落不进视野,只有在这里对全文
+        跑一次,MULTI5 学到的语义分段才有机会生效。
+        只在有没进过全文整理的新内容时才收尾;整理完用户又手改过的文本(落在 clean_text/frozen)
         不再重跑整理——用户既然亲手改了,就是最终版,别拿模型再翻一遍把用户改的字盖回去。"""
         with self._seg_lock:
-            has_raw = bool(self.raw_segs)
-        if has_raw:
-            if self.polish_mode == "小范围整理" or not self.full_polish:
-                self._clean_pending()
-            else:
-                self._full_polish_pending()
+            need = self._needs_full_polish
+        if need:
+            self._full_polish_pending()  # full_polish 没注入时它自己回退 _clean_pending
         with self._seg_lock:
             clean, conf, raws = self.frozen + self.clean_text, self.clean_conf, self.raw_segs
             if not clean and not raws:
@@ -788,6 +791,7 @@ class TextBuffer:
             if conf is not None and conf < self.min_confidence:
                 return False  # 置信度不足：不清空缓存，留给下一轮/用户重说覆盖
             self.frozen, self.clean_text, self.clean_conf, self.raw_segs = "", "", None, []
+            self._needs_full_polish = False
         self._commit(clean, raws)
         return True
 
@@ -814,6 +818,7 @@ class TextBuffer:
         """丢弃面板里攒的全部文字（整理结果+未整理新句）。进休眠时用：用户没处理就直接扔。"""
         with self._seg_lock:
             self.frozen, self.clean_text, self.clean_conf, self.raw_segs = "", "", None, []
+            self._needs_full_polish = False
             self._speech_ended_at = None
             self._speaking = False
 
@@ -824,8 +829,10 @@ class TextBuffer:
         with self._seg_lock:
             if self._edit_needs_polish:
                 self.frozen, self.clean_text, self.clean_conf, self.raw_segs = "", "", None, [text]
+                self._needs_full_polish = True
             else:
                 self.frozen, self.clean_text, self.clean_conf, self.raw_segs = "", text, None, []
+                self._needs_full_polish = False  # 用户亲手改过=最终版，收尾不再回炉
 
     def integrate(self, text):
         """深度整理结果落地：整段作为已定稿的 frozen 块，后续新句只在其后追加、绝不回炉
@@ -833,6 +840,7 @@ class TextBuffer:
         跟 replace_all 的区别就在这：整段进 frozen（不再重跑），不进 clean_text（会重跑）。"""
         with self._seg_lock:
             self.frozen, self.clean_text, self.clean_conf, self.raw_segs = text, "", None, []
+            self._needs_full_polish = False
 
     @property
     def text(self):
@@ -1013,4 +1021,29 @@ if __name__ == "__main__":
     if b8._speech_ended_at == t_before:
         b8._speech_ended_at = None
     assert b8._speech_ended_at is not None, "新 speech-end 时间戳不能被抹"
+    # 小范围模式的收尾全文整理：静默倒计时的滑动窗口会先把 raw_segs 吃光、把头部冻进 frozen，
+    # 发送时仍须对全文（含冻结头部）跑一次——否则模型每次只看得到活跃窗那一小片，语义分段没机会发生
+    full9 = []
+    def full9_call(text, mode):
+        full9.append((text, mode))
+        return text + "[全文]", 0.9
+    got9 = []
+    b9 = TextBuffer(polish=cln, paste=got9.append, quiet_seconds=0.01,
+                    context_chars=4, polish_mode="小范围整理", full_polish=full9_call)
+    b9.add("aaaa。"); settle(b9)
+    b9.add("bbbb。"); settle(b9)
+    assert b9.frozen and not b9.raw_segs, (b9.frozen, b9.raw_segs)
+    assert full9 == [], full9  # 平时（倒计时触发）仍走滑动窗口，不跑全文
+    assert b9.flush_all() is True
+    assert len(full9) == 1 and full9[0] == ("AAAA。BBBB。", "小范围整理"), full9
+    assert got9 == ["AAAA。BBBB。[全文]"], got9
+    b9.trigger_polish_now()  # 已发送清空，没有新内容就别空跑一次 LLM
+    assert len(full9) == 1, full9
+    # 用户手改过的文本=最终版，收尾不回炉重整理
+    b10 = TextBuffer(polish=cln, paste=lambda t: None, quiet_seconds=999,
+                     context_chars=4, polish_mode="小范围整理", full_polish=full9_call)
+    b10.clean_text = "已整理。"
+    b10.replace_all("手改过。")
+    b10.flush_all()
+    assert len(full9) == 1, full9
     print("panel self-check OK")
