@@ -256,7 +256,8 @@ def _run_gui(config_path, history_dir, reminders_log, import_trigger, restart_tr
     api = _Api(config_path, import_trigger, restart_trigger, history_dir, reminders_log)
     win = webview.create_window(_WIN_TITLE, html=_build_html(cfg, cfg_dir, history_dir, reminders_log, tab),
                                 js_api=api, width=900, height=660, min_size=(720, 500),
-                                frameless=True, easy_drag=False, background_color="#FFFFFF")
+                                frameless=True, easy_drag=False, background_color="#FFFFFF",
+                                on_top=True)
     api._window = win
 
     def _on_closing():
@@ -269,24 +270,13 @@ def _run_gui(config_path, history_dir, reminders_log, import_trigger, restart_tr
     win.events.closing += _on_closing
 
     def _bring_to_front():
-        """把主窗强制拽到最前:pywebview 默认按普通新窗口起,常被浏览器/编辑器盖住。
-        SW_RESTORE 处理最小化;topmost 脉冲一下(设 TOPMOST 再取消)绕过 Windows 的
-        SetForegroundWindow 抢焦点保护;最后再 SetForegroundWindow 定焦。"""
-        if os.name != "nt":
-            return
+        """建窗时前置并激活，随即恢复普通层级，让用户切换的窗口正常盖过来。"""
         try:
-            import ctypes
-            user32 = ctypes.windll.user32
-            hwnd = user32.FindWindowW(None, _WIN_TITLE)
-            if not hwnd:
-                return
-            user32.ShowWindow(hwnd, 9)  # SW_RESTORE
-            # HWND_TOPMOST=-1, HWND_NOTOPMOST=-2, SWP_NOMOVE|SWP_NOSIZE|SWP_NOACTIVATE=0x13
-            user32.SetWindowPos(hwnd, -1, 0, 0, 0, 0, 0x13)
-            user32.SetWindowPos(hwnd, -2, 0, 0, 0, 0, 0x13)
-            user32.SetForegroundWindow(hwnd)
+            win.show()
         except Exception as e:
             print(f"[warn] 主窗前置失败: {e}")
+        finally:
+            win.on_top = False
     win.events.shown += _bring_to_front
 
     from saymore.paths import PROJECT_ROOT

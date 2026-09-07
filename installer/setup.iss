@@ -109,3 +109,32 @@ Type: files;          Name: "{app}\kws-model\keywords_raw.txt"
 Type: filesandordirs; Name: "{app}\_internal"
 ; 兜底:老版本 onefile 残留(现走 onedir 用不上,留着无害)
 Type: filesandordirs; Name: "{app}\_MEI*"
+
+[Code]
+function InitializeUninstall(): Boolean;
+var
+  Locator, Services, Processes, Process: Variant;
+  I: Integer;
+begin
+  Result := False;
+  try
+    Locator := CreateOleObject('WbemScripting.SWbemLocator');
+    Services := Locator.ConnectServer('.', 'root\CIMV2');
+    Processes := Services.ExecQuery('SELECT ExecutablePath FROM Win32_Process WHERE Name = ''{#AppExeName}''');
+    for I := 0 to Processes.Count - 1 do
+    begin
+      Process := Processes.ItemIndex(I);
+      if not VarIsNull(Process.ExecutablePath) then
+        if CompareText(Process.ExecutablePath, ExpandConstant('{app}\{#AppExeName}')) = 0 then
+        begin
+          MsgBox('Saymore 程序正在运行，请关闭以后再卸载。' + #13#10 +
+            '请右键点击系统托盘中的 Saymore 图标，选择“退出”，然后重新卸载。', mbError, MB_OK);
+          Exit;
+        end;
+    end;
+    Result := True;
+  except
+    MsgBox('无法检查 Saymore 是否正在运行，已取消卸载。请稍后重试。' + #13#10 +
+      GetExceptionMessage, mbError, MB_OK);
+  end;
+end;
