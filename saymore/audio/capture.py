@@ -38,6 +38,7 @@ class Recorder:
         self._reset_buf()
 
     def _reset_buf(self):
+        self._discard_pending = False
         # RMS 回退路径的状态
         self._buf = []
         self._buf_len = 0
@@ -54,6 +55,9 @@ class Recorder:
         block = indata[:, 0].copy()
         if block.size == 0:
             return
+        if self._discard_pending:
+            # 别的线程请求丢弃缓冲（唤醒瞬间），在本线程里执行，见 discard_current
+            self._reset_buf()
         if self.on_block is not None:
             self.on_block(block)
 
@@ -106,8 +110,14 @@ class Recorder:
         self.on_segment(seg)
 
     def discard_current(self):
-        """丢弃当前累积的缓冲（唤醒瞬间调用，避免把唤醒词本身当正文转写）。"""
-        self._reset_buf()
+        """丢弃当前累积的缓冲（唤醒瞬间调用，避免把唤醒词本身当正文转写）。
+
+        只置旗标，真正的清空推迟到下一个音频块、在 PortAudio 回调线程里做。
+        原因：本方法由 KWS 线程调用，而 sherpa-onnx 的 VoiceActivityDetector
+        不是线程安全的——跨线程 vad.reset() 会和回调里正在跑的 accept_waveform
+        撞车，弄坏内部环形缓冲，偶发 `ValueError: vector too long` 弹窗。
+        """
+        self._discard_pending = True
 
     def start(self):
         self._reset_buf()
