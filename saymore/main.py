@@ -724,10 +724,6 @@ def main():
             print(f"[warn] llama-server 整理失败，原样回填: {e}")
             return text, None
 
-    def polish_text(text):
-        """小范围整理（滑动窗口用）：逐句删口水/修错/断句。"""
-        return _run_polish(text, "小范围整理")
-
     def commit_text(text):
         """整理后的整段文字回填输入框，登记回退栈。由 TextBuffer 触发（发送/输入 命令都会走到这）。
         只回填，不写历史文件——历史/热词要等真正「发送」了才算数，见 run_global_command。"""
@@ -745,13 +741,11 @@ def main():
         state["last_filled"] = text  # 缓存窗口回填进输入框的最终文本，发送时直接写历史/热词
 
     buffer = panel.TextBuffer(
-        polish=polish_text, paste=commit_text,
+        polish=_run_polish, paste=commit_text,
         quiet_seconds=cfg.get("polish_quiet_seconds", 5.0),
         immediate=not cfg.get("panel", True),
         min_confidence=cfg.get("polish_min_confidence", 0.6),
-        context_chars=cfg.get("polish_context_chars", 80),
         polish_mode=cfg.get("polish_mode", "小范围整理"),
-        full_polish=lambda text, mode: _run_polish(text, mode),
     )
     state["panel"] = buffer  # 供悬浮窗渲染面板文字、enter_sleep 收尾
 

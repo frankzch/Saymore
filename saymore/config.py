@@ -42,7 +42,6 @@ DEFAULT_CONFIG = {
     "polish_quiet_seconds": 10.0,   # 停止说话后等多久自动触发整理(秒)
     "polish_min_confidence": 0.6,   # 整理置信度低于此值：面板里该段标红提示用户复核，不丢弃/不阻断回填
     "panel_low_conf_rgb": ui_style.PANEL_LOW_CONF_RGB,  # 整理置信度偏低：红色
-    "polish_context_chars": 80,  # 小范围整理的活跃窗上限(字)：只重整理最近这么多字+新句
     "hear_cue_min_gap": 3.0,     # 每识别一句回一声"嗯/好"的最小间隔(秒)
     "save_audio": True,          # True=留存语音 wav+转写结果给端到端微调攒同分布数据
     "panel": True,               # True=识别句先进右下角半透明玻璃面板缓冲，可语音纠正后再整理回填输入框
