@@ -1,6 +1,4 @@
 __pycache__/
-/geo_monitor/
-/tests/test_geo_monitor.py
 *.pyc
 .venv/
 venv/
