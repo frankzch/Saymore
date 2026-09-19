@@ -13,6 +13,7 @@
 ;   llama-cpp\            ← 推理引擎
 ;   models\               ← 首启后台下载的 ASR gguf(约 1.5GB)——卸载删
 ;   logs\                 ← 运行日志——卸载删
+;   comtypes_cache\       ← 运行时生成的 COM 包装(UIA/SAPI)——卸载删
 ; 见 saymore/paths.py: 打包后 PROJECT_ROOT = Saymore.exe 所在目录。
 
 #define AppName        "Saymore"
@@ -98,6 +99,8 @@ Filename: "{app}\{#AppExeName}"; Description: "立即启动 {#AppName}"; Flags: 
 ; 之后 {app}\ 若空,Inno 会自动清掉(需 [Setup] 里没设 UsePreviousAppDir=no 之类;默认行为即可)。
 Type: filesandordirs; Name: "{app}\models"
 Type: filesandordirs; Name: "{app}\logs"
+; comtypes 生成的 UIA/SAPI 包装缓存(saymore/win/comtypes_cache.py 从 %TEMP% 挪过来的)
+Type: filesandordirs; Name: "{app}\comtypes_cache"
 ; 运行时刮痕文件(.launch_count / .ready / .*trigger / .download_*.json 等)
 ; 一并清掉,重装才能重置"首启弹窗"计数
 Type: files;          Name: "{app}\.*"

@@ -18,18 +18,8 @@ import keyboard
 import pyperclip
 
 
-def _ensure_comtypes_gendir():
-    """import uiautomation 会让 comtypes 现生成 UIAutomation 包装并写入
-    %TEMP%\\comtypes_cache\\<exe>-<ver>\\;该目录被 Windows 磁盘清理/存储感知删掉后
-    comtypes 不会自己重建,写缓存失败 → UIAutomationCore.dll 加载失败 → 发送/回退等
-    命令彻底失效(且每次调用都重试刷屏)。每次 import 前显式重建该目录兜底。"""
-    try:
-        import comtypes.client  # import 它才算出 gen_dir,不触发 UIA 包装生成
-        d = getattr(comtypes.client, "gen_dir", None)
-        if d:
-            os.makedirs(d, exist_ok=True)
-    except Exception:
-        pass
+# import uiautomation 会现生成 UIA 包装写进 comtypes 缓存目录;每次 import 前确保它在(见 comtypes_cache)
+from saymore.win.comtypes_cache import ensure as _ensure_comtypes_gendir
 
 
 _FOCUS_READY = False

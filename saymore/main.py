@@ -719,10 +719,16 @@ def main():
         # 合一 multi 挂着就恒走它（四风格同一 adapter）；回滚到老双人格时才按 mode 分 deep/basic。
         role = "multi" if "multi" in llama_asr.loras else ("deep" if mode == "深度整理" else "basic")
         try:
-            return llama_asr.polish(text, system=local_polish.system_for(mode), role=role)
+            out, conf = llama_asr.polish(text, system=local_polish.system_for(mode), role=role)
         except Exception as e:
             print(f"[warn] llama-server 整理失败，原样回填: {e}")
             return text, None
+        # 保险：长段整理后不到一半 → 多半是模型把口述内容当指令执行了（如"以X为标题写篇文章"
+        # 只吐回标题），宁可不整理也别吞话。代价：改口删掉大段前文的正常整理也会被退回原文。
+        if len(core) >= 30 and len(out.strip()) < len(core) * 0.5:
+            print(f"[warn] 整理结果过短（{len(core)}字→{len(out.strip())}字），疑似丢内容，退回原文: {out!r}")
+            return text, None
+        return out, conf
 
     def commit_text(text):
         """整理后的整段文字回填输入框，登记回退栈。由 TextBuffer 触发（发送/输入 命令都会走到这）。
