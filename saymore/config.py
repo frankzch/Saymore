@@ -64,7 +64,7 @@ DEFAULT_CONFIG = {
     "focus_window_title": "",    # 留空=通用：一律在当前前台窗口自动找输入框
     "focus_input_name": "",      # 仅当前台命中 focus_window_title 时才用 UIA 精确定位到此名字的输入控件
     "send_words": ["发送", "提交"],       # 整句只说这些词之一时，不打字而是切回窗口回填/回车提交
-    "auto_enter": True,                    # 发送时是否自动按回车提交
+    "auto_enter": False,                   # 发送时是否自动按回车提交
     "confirm_words": ["弹框确认", "确认弹框"],
     "undo_words": ["回退", "撤销"],
     "clear_words": ["清空", "清空重来"],

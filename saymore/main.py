@@ -585,7 +585,7 @@ def main():
         return text
 
     send_words = set(cfg.get("send_words", []))
-    auto_enter = cfg.get("auto_enter", True)
+    auto_enter = cfg.get("auto_enter", False)
     confirm_words = set(cfg.get("confirm_words", []))
     undo_words = set(cfg.get("undo_words", []))
     clear_words = set(cfg.get("clear_words", []))
