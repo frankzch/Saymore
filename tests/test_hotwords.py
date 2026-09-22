@@ -45,7 +45,7 @@ class HotwordRankingTest(unittest.TestCase):
             )
             hotwords = HotWords(
                 lambda name: root / name,
-                lambda _system, _text: '["老词", "老词", "最新词"]',
+                lambda _system, _text: "老词\n老词\n最新词",  # extract 人格训练格式：每行一词
             )
 
             hotwords._distill()

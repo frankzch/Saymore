@@ -110,10 +110,6 @@ _CMD_ACK_CUES = ["好的", "收到"]
 # 每识别出一句普通听写句的即时应答（随机选一个，短，别等整理好——整理太慢）
 _HEAR_CUES = ["嗯", "好"]
 
-# 缓存窗口文本成功发送后，连续空闲 10 秒才在后台切词并加入历史热词；期间重新开口会重置计时。
-# 避开连续听写，同时让刚说过的术语在本次唤醒会话里也能帮助后续内容。
-_HOTWORD_DISTILL_IDLE_SECONDS = 10.0
-
 
 _BACKEND_LOCK = None  # 单例互斥量句柄,进程生命周期内必须挂着不释放
 
@@ -455,11 +451,15 @@ def main():
         else:
             print("[warn] 未安装 opencc，无法转简体（pip install opencc）")
 
-    # 热词自学习：真正发送时记最终文本，连续空闲 10 秒后走本地 llama-server(extract 人格)；
-    # 记录最近出现时间和累计次数，双榜名次融合写 hotwords.txt。单轮字数封顶 1500、硬超时 8s。
+    # 热词自学习：真正发送时记最终文本，进休眠后、卸模型前走本地 llama-server(extract 人格)切词；
+    # 记录最近出现时间和累计次数，双榜名次融合写 hotwords.txt。单轮字数封顶 1500、超时 30s(休眠时不抢识别)。
+    # 缺 extract LoRA 就停用自学习并响亮告警：借整理人格切词只会吐空/乱词（08-09~09-22 曾因此静默失败 6 周）
+    if "extract" not in _loras:
+        print("[error] 未找到 polish_lora/extract-lora.gguf，热词自学习已停用（屏幕提词退回借整理人格）")
     hotwords = HotWords(_resolve,
-        lambda system, text: llama_asr.extract(text, system, role="extract",
-                                                timeout=8, max_tokens=256))
+        (lambda system, text: llama_asr.extract(text, system, role="extract",
+                                                 timeout=30, max_tokens=256))
+        if "extract" in _loras else None)
     # 屏幕上下文热词：后台抓前台窗口文字，交本地 llama-server 提术语，转写时拼进偏置。
     screen_extractor = make_llm_extractor(
         lambda system, text: llama_asr.extract(text, system, role="extract"),
@@ -618,8 +618,13 @@ def main():
         print(reason)
         if was_reminder:
             threading.Thread(target=tts.speak, args=("好的，退出提醒。",), daemon=True).start()
-        unload_model()
-        hotwords.distill_async()  # 空闲点：把新攒的发送历史交给 LLM 切词，更新热词文件
+        def _learn_then_unload():
+            # 热词学习只在休眠做：趁模型还没卸，把积压的发送历史切完再放显存；中途被唤醒就停且不卸
+            asleep = lambda: state["mode"] == "sleep" and not state["quit"]
+            hotwords.distill_all(asleep)
+            if asleep():
+                unload_model()
+        threading.Thread(target=_learn_then_unload, daemon=True).start()
 
     def confirm_quit():
         """弹出 确认/取消 对话框，确认后置 quit 让主循环退出。阻塞当前 worker 线程，无妨。"""
@@ -920,10 +925,6 @@ def main():
         回到待唤醒并卸载模型释放内存/显存。下次唤醒重新加载（慢几秒）。"""
         while not state["quit"]:
             time.sleep(1)
-            if state["mode"] == "awake" and not state.get("speaking") \
-                    and seg_queue.empty() and state["status"] != "transcribing" \
-                    and time.time() - state["last_activity"] > _HOTWORD_DISTILL_IDLE_SECONDS:
-                hotwords.distill_async()
             # 提醒模式：从「话音落」(last_seg_time，切句时刻)算停顿，超阈值就合并送 LLM。
             # 要求没在说话(speaking)、队列空、且当前没段在识别(status≠transcribing)——
             # 即「已说的都识别完了」才送；识别还没跑完就继续等（不丢句）。

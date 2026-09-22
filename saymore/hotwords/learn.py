@@ -1,4 +1,4 @@
-"""热词自学习：每句口述回填时快照文本，空闲时交给本地 llama-server(extract 人格)
+"""热词自学习：每句口述回填时快照文本，休眠时交给本地 llama-server(extract 人格)
 切词；按最近出现时间（2/3）和累计次数（1/3）的名次融合排序，写入 hotwords.txt
 喂给 Qwen3-ASR 的 context 偏置。越新、越常说的词越靠前。
 数据文件（均在脚本目录，不入库）：
@@ -13,41 +13,23 @@ import re
 import threading
 import time
 
+# 切词走 extract 人格：提示词/输出格式必须与它训练时一致（训推同源），否则 LoRA 输出对不上解析
+from saymore.hotwords.screen import EXTRACT_SYSTEM, parse_terms
+
 TOP_N = 60          # 写进热词文件的词数上限；context 过长会拖慢推理
 BATCH_CHARS = 1500  # 每轮送本地模型的历史总字数上限（不按行数，用户可能一次口述整篇文章）
 TIMEOUT_SEC = 8     # 单轮硬超时：整个 distill 走完（含 llama-server 调用）必须 ≤10s，超时本轮丢弃 done 不推进
-MAX_TOKENS = 256    # 切词输出的 JSON 数组可能较长（几十个词），比屏幕提词的 32 大得多
+MAX_TOKENS = 256    # 一批历史能挑出几十个词，比屏幕提词的 32 大得多
 RECENCY_WEIGHT = 2 / 3
 FREQUENCY_WEIGHT = 1 / 3
-
-_SEG_PROMPT = (
-    "从下面这些用户输入的句子中提取【专业词汇、技术术语、专有名词、行业用语、"
-    "产品名、人名地名机构名】，输出一个 JSON 数组：\n"
-    "- 每个元素是一个词；同一个词出现几次就输出几次（用于统计词频）。\n"
-    "- 中文词要 2 字及以上（不要单字）；英文单词/专有名词原样保留。\n"
-    "- 不要标点、纯数字、语气词。\n"
-    "- 跳过日常普通词（如'我们、可以、然后、已经、需要'等），只保留语音识别容易出错的专业/生僻词汇。\n"
-    "- 剔除明显不成词、疑似语音识别错误的组合。\n"
-    "只输出 JSON 数组，不要任何解释。\n\n"
-)
 
 _WORD_RE = re.compile(r"[A-Za-z0-9一-鿿][A-Za-z0-9一-鿿 .+#\-]*")
 
 
 def _parse_words(out):
-    """从 LLM 输出提取词列表：取最外层 JSON 数组，过滤非法/超长项。解析失败返回 None。"""
-    m = re.search(r"\[.*\]", out or "", re.S)
-    if m is None:
-        return None
-    try:
-        arr = json.loads(m.group(0))
-    except Exception:
-        return None
-    if not isinstance(arr, list):
-        return None
-    return [w.strip() for w in arr
-            if isinstance(w, str) and 2 <= len(w.strip()) <= 20
-            and _WORD_RE.fullmatch(w.strip())]
+    """extract 人格按训练格式"每行一个词"输出；复用屏幕提词的解析去噪，再过滤单字/超长项。"""
+    return [w for w in parse_terms(out, topn=10 ** 6)
+            if 2 <= len(w) <= 20 and _WORD_RE.fullmatch(w)]
 
 
 def _dense_ranks(items, value):
@@ -88,23 +70,22 @@ def rank_terms(terms, limit=TOP_N):
 
 
 def _update_terms(terms, words, entries):
-    """累计词次，并从原始句中找出每个词最后出现的准确时间。"""
+    """累计词次（按该词在历史原文里的出现次数计，模型只负责挑词），并找出每个词最后出现的准确时间。"""
     fallback_seen = max((str(e.get("t", "")) for e in entries), default="")
     for word in words:
-        matched = [
-            str(e.get("t", "")) for e in entries
-            if word.casefold() in str(e.get("final", "")).casefold()
-        ]
+        w = word.casefold()
+        hits = [(str(e.get("t", "")), str(e.get("final", "")).casefold().count(w)) for e in entries]
+        matched = [t for t, n in hits if n]
         seen = max(matched, default=fallback_seen)
         stat = terms.setdefault(word, {"count": 0, "last_seen": ""})
-        stat["count"] = int(stat.get("count", 0)) + 1
+        stat["count"] = int(stat.get("count", 0)) + max(sum(n for _, n in hits), 1)
         stat["last_seen"] = max(str(stat.get("last_seen", "")), seen)
 
 
 class HotWords:
     def __init__(self, resolve, extract_fn):
         """extract_fn(system, text) -> str：走本地 llama-server extract 人格。
-        为空则 distill_async 直接跳过（例如 llama-server 没起或没挂 LoRA）。"""
+        为空则 distill_all 直接跳过（例如没挂 extract LoRA）。"""
         self.extract_fn = extract_fn
         self.history_dir = resolve("typed_history")
         self.state_file = resolve("hotwords.json")
@@ -173,16 +154,18 @@ class HotWords:
             self._dirty = True
         print(f"[hotwords] 已记录口述文本 {len(final)} 字")
 
-    def distill_async(self):
-        """空闲点调用：后台把新攒的历史送本地 llama-server 切词并更新热词文件。"""
-        with self._lock:
-            if self._busy or not self._dirty or not self.extract_fn or not self.history_dir.exists():
+    def distill_all(self, keep_going):
+        """休眠时调用（同步，调用方自开线程）：一轮轮切完积压历史，keep_going() 为假（被唤醒）就停。
+        只在休眠做，不和唤醒期的识别抢 llama-server 单槽；当前语境的术语已由屏幕切词实时补上。"""
+        while keep_going():
+            with self._lock:
+                if self._busy or not self._dirty or not self.extract_fn or not self.history_dir.exists():
+                    return
+                # 先占位并清脏；提炼期间若又 record，record 会重新置脏，下一轮继续处理。
+                self._busy = True
+                self._dirty = False
+            if not self._distill():  # 失败就停，别对着挂掉的 server 空转
                 return
-            # 先占位并清脏，防 idle_watcher 连续启动重复线程；提炼期间若又 record，
-            # record 会重新置脏，下一轮继续处理。
-            self._busy = True
-            self._dirty = False
-        threading.Thread(target=self._distill, daemon=True).start()
 
     def _distill(self):
         try:
@@ -218,11 +201,12 @@ class HotWords:
             body = "\n".join(e["final"] for e in entries)[:BATCH_CHARS]
             print(f"[hotwords] 开始历史切词，送 {len(entries)} 条历史 / {len(body)} 字")
             t0 = time.time()
-            out = self.extract_fn(_SEG_PROMPT, body)
+            out = self.extract_fn(EXTRACT_SYSTEM, body)
+            if not out:  # server 没活着/没输出：不推进 done，否则这批历史被静默跳过
+                print("[hotwords] [error] 切词返回空（llama-server 未运行？），本批不推进，下次休眠重试")
+                self._dirty = True
+                return False
             words = _parse_words(out)
-            if words is None:
-                print(f"[hotwords] LLM 输出无法解析，本轮跳过（有新历史时重试）: {out[:80]!r}")
-                return
             terms = st["terms"]
             _update_terms(terms, words, entries)
             done.update(consumed)
@@ -239,18 +223,19 @@ class HotWords:
                 self._dirty = True  # 可能还有下一批；多空跑一次也会自行停下
             print(f"[hotwords] 历史切词完成，本轮切出 {len(words)} 词，累计 {len(terms)} 词，"
                   f"热词 {len(top)} 个已更新 {self.txt_file.name}，耗时 {time.time() - t0:.1f}s")
+            return True
         except Exception as e:
-            print(f"[hotwords] 提炼失败，本轮跳过（有新历史时重试）: {e}")
+            print(f"[hotwords] [error] 提炼失败，本批不推进（有新历史时重试）: {e}")
+            return False
         finally:
             self._busy = False
 
 
 if __name__ == "__main__":
     # 自检：解析/过滤逻辑
-    ws = _parse_words('好的，结果是 ["语音识别", "热词", "，", "a", "Claude Code", 3, "的"]')
+    ws = _parse_words("1. 语音识别\n热词\n，\na\nClaude Code\n热词\n的")
     assert ws == ["语音识别", "热词", "Claude Code"], ws
-    assert _parse_words("没有数组") is None
-    assert _parse_words('[]') == []
+    assert _parse_words("") == []
     # 双榜名次融合：新近性占 2/3，频次占 1/3；同值共享名次。
     terms = {
         "最新一次": {"count": 1, "last_seen": "2026-08-23 10:00:00"},
