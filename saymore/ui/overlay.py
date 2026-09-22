@@ -1,4 +1,4 @@
-"""屏幕右下角常驻悬浮窗：状态圆环 + 猫 + token 飘字 + 玻璃文字面板。
+"""屏幕右下角悬浮小圆：按可用空间展开标题栏＋缓存文字，位置与轮廓平滑变形。
 
 Pillow 超采样抗锯齿渲染 → Win32 分层窗口逐像素 alpha 贴图；主线程跑消息循环。
 从 voice_input.py 拆出——只靠传入的 state 字典与主程序通信。
@@ -13,6 +13,9 @@ from pathlib import Path
 import numpy as np
 
 import saymore.ui.panel as panel
+from saymore.ui.capsule import (CapsuleText, Morph, default_position, draw_capsule,
+                                expansion_direction, expansion_bounds, expansion_offset)
+from saymore.ui.capsule_toolbar import HEADER_HEIGHT, MIN_WIDTH, button_rects, draw_toolbar, hit_button
 import saymore.ui.tray as tray
 import saymore.ui.style as ui_style
 from saymore.paths import CONFIG_PATH
@@ -23,7 +26,6 @@ _ICON_PATH = CONFIG_PATH.parent / "saymore.ico"
 # 悬浮窗几何/配色（供 _render_overlay 与 run_overlay 共用）
 _OV_D = 58           # 控件逻辑尺寸(px)
 _OV_SS = 4           # 超采样倍率：先放大 4× 画再缩小，得到抗锯齿平滑边缘
-_OV_FONT = None      # 数字字体（首次渲染惰性加载）
 _CAT_FRAMES = None   # 猫姿势帧缓存（首次渲染惰性加载并预处理）
 _OV_TH = 22          # 悬浮窗顶部 token 飘字条高度(px)；猫位置不变，窗口整体上移这么多
 _OV_RIGHT_GAP = 40   # 默认距主屏工作区右边缘
@@ -76,38 +78,6 @@ def _system_message_font_px(user32):
     if user32.SystemParametersInfoW(0x0029, metrics.cbSize, ctypes.byref(metrics), 0):
         return max(1, abs(metrics.lfMessageFont.lfHeight))
     return 16
-
-
-def _ov_font(size=13):
-    """token 飘字用的小号粗体（惰性加载）：微软雅黑粗体，与 ui_style 主题字体一致
-    （中文也有字形，Arial 没有）。都取不到则退回默认字体。"""
-    global _OV_FONT
-    if _OV_FONT is None or _OV_FONT[0] != size:
-        from PIL import ImageFont
-        for face in ("msyhbd.ttc", "msyh.ttc", "arialbd.ttf"):
-            try:
-                _OV_FONT = (size, ImageFont.truetype(face, size))
-                break
-            except Exception:
-                continue
-        else:
-            _OV_FONT = (size, ImageFont.load_default())
-    return _OV_FONT[1]
-
-
-def _draw_tokens(canvas, w, strip_h, tin, tout, fade, font_size=13):
-    """在画布顶部窄带里画 `in/out` token 数字（绿=输入 橙=输出），按 fade(0~1) 整体淡出。"""
-    from PIL import ImageDraw
-    d = ImageDraw.Draw(canvas)
-    font = _ov_font(font_size)
-    a = int(255 * fade)
-    parts = [(str(tin), (90, 220, 120, a)), ("/", (170, 170, 170, a)), (str(tout), (255, 170, 60, a))]
-    widths = [d.textlength(t, font=font) for t, _ in parts]
-    x = (w - sum(widths)) / 2
-    y = (strip_h - font_size) / 2
-    for (t, col), tw in zip(parts, widths):
-        d.text((x, y), t, font=font, fill=col)
-        x += tw
 
 
 def _get_cat_frames():
@@ -166,7 +136,9 @@ def _get_cat_frames():
     return _CAT_FRAMES or None
 
 
-import math
+
+
+_BORDER_RGB = (52, 168, 83)  # 小圆与缓存窗口统一 1px 绿描边，在浅薄荷底和白底应用上都框得住
 
 
 def _downloading_hint(runtime):
@@ -212,105 +184,12 @@ def _downloading_hint(runtime):
     return "运行环境未就绪：正在准备下载…"
 
 
-# 圆环配色：休眠=冷静蓝呼吸；激活态=固定绿，说话时由浅到深连续呼吸，一段白光沿环扫过。
-# 白流光两端渐隐（无硬起点）。
-_SLEEP_RING_RGB = (90, 170, 255)     # 休眠：冷静的蓝
-_ACTIVE_RING_RGB = (52, 199, 89)     # 激活态：固定绿（不说话时保持不变，即呼吸的最深色）
-_SWEEP_RGB = (150, 205, 255)         # 流光默认色（激活态由白光覆盖）
-_RING_RGB = _SLEEP_RING_RGB          # 兼容旧调用的默认色
-
-
-def _speaking_ring_rgb(phase, base=_ACTIVE_RING_RGB):
-    """说话时颜色明暗呼吸：以 base（非说话时的固定色）为最深点，只往浅了变，不再更深。
-    phase 由外部按速度累加，经正弦来回摆动。"""
-    u = 0.5 + 0.5 * math.sin(2 * math.pi * phase)      # 0..1 往返
-    light = 0.45 * u                                    # 0(=base 最深)..0.45(最浅) 混入白色比例
-    return tuple(c + (255 - c) * light for c in base)
-
-
-def _lerp_rgb(cur, tgt, k=0.18):
-    """把当前色朝目标色逐帧靠拢，避免休眠↔激活切换与巡回换色时突变（渐变）。"""
-    return tuple(c + (t - c) * k for c, t in zip(cur, tgt))
-
-
-def _ring(img, SD, cx, cy, rc, w, rgb, glow=0.55):
-    """扁平发光环：实心色环 + 柔和外扩光晕（霓虹发光感），无 3D 管状明暗/高光。
-    glow 为光晕强度，外部按时间脉动传入 → 闪闪发光。"""
-    import numpy as np
-    from PIL import Image
-    yy, xx = np.mgrid[0:SD, 0:SD]
-    d = np.abs(np.hypot(xx - cx, yy - cy) - rc)    # 到环中心线的距离
-    edge = max(1.0, SD * 0.002)                    # 边缘羽化（抗锯齿）：调小=更硬
-    core = np.clip((w / 2.0 - d) / edge + 0.5, 0, 1)   # 实心环带，边缘平滑过渡
-    halo = np.exp(-(d / (w * 0.8)) ** 2) * glow        # 高斯光晕：向内外柔和发光
-    base = np.array(rgb, np.float64)
-    light = np.minimum(255.0, base + 100.0)            # 光晕偏亮 → 发光感
-    whalo = np.clip(halo - core, 0, 1)                 # 光晕中被实心环盖住的部分不重复算
-    denom = np.clip(core + whalo, 1e-6, None)
-    rgbmap = (core[..., None] * base + whalo[..., None] * light) / denom[..., None]
-    a = np.clip(np.maximum(core, halo), 0, 1)
-    out = np.dstack([np.clip(rgbmap, 0, 255), a * 255]).astype("uint8")
-    img.alpha_composite(Image.fromarray(out, "RGBA"))
-
-
-def _sweep(img, SD, cx, cy, rc, w, ang, rgb=_SWEEP_RGB, tail=0.8):
-    """光束扫过：一段亮弧沿环带叠加，以 ang(弧度)为中心向两侧对称渐隐——
-    头尾都模糊、没有硬起点。作为半透明层叠在暗底环上：中心盖出亮色，两端渐透露出底环。"""
-    import numpy as np
-    from PIL import Image
-    yy, xx = np.mgrid[0:SD, 0:SD]
-    d = np.abs(np.hypot(xx - cx, yy - cy) - rc)        # 到环中心线的距离
-    edge = max(1.0, SD * 0.002)
-    core = np.clip((w / 2.0 - d) / edge + 0.5, 0, 1)   # 环带形状（限定亮弧只在环上）
-    dist = np.abs((ang - np.arctan2(yy - cy, xx - cx) + math.pi) % (2 * math.pi) - math.pi)  # 到中心的最短角距
-    lum = np.exp(-(dist / tail) ** 2)                  # 中心对称钟形，两端渐隐
-    col = np.broadcast_to(np.array(rgb, np.float64), (SD, SD, 3))
-    alpha = np.clip(lum * core, 0, 1)                  # 靠 alpha 渐隐，两端柔和融进底环
-    out = np.dstack([col, alpha * 255]).astype("uint8")
-    img.alpha_composite(Image.fromarray(out, "RGBA"))
-
-
-def _overlay_image(cat=None, ring_rgb=_RING_RGB, glow=0.55, sweep=None, sweep_rgb=_SWEEP_RGB,
-                   sweep_tail=0.8, output_size=None):
-    """用 Pillow 超采样渲染一帧悬浮窗，返回逻辑尺寸的 RGBA 图。
-    背景透明；猫为主体铺在圆框内，外圈一整圈发光装饰环；sweep(弧度)非空则叠一段绕环流光。"""
-    from PIL import Image
-
-    D, S = _OV_D, _OV_SS
-    SD = D * S
-    f = lambda frac_: int(SD * frac_)  # 按控件尺寸取比例像素，改 _OV_D 即整体缩放
-    cx = cy = SD // 2
-    img = Image.new("RGBA", (SD, SD), (0, 0, 0, 0))
-    # 整圆先铺一层近乎不可见的底(alpha=1)：逐像素 alpha 分层窗靠 alpha 命中鼠标，否则圆环内部及
-    # 四周透明处右键/拖动都会穿透到背后窗口——只有猫的实心像素能点中（原「只有下半能右键」之因）。
-    # 必须做最底层用 alpha_composite 让猫/环叠上，否则 ImageDraw 直画会把上层像素覆盖掉。
-    from PIL import ImageDraw
-    hit_r = SD / 2 - f(0.02)               # 盖到环外沿，整个可见圆都可点
-    hit = Image.new("RGBA", (SD, SD), (0, 0, 0, 0))
-    ImageDraw.Draw(hit).ellipse([cx - hit_r, cy - hit_r, cx + hit_r, cy + hit_r], fill=(0, 0, 0, 1))
-    img.alpha_composite(hit)
-    if cat is not None:
-        img.alpha_composite(cat)
-
-    ring_w = max(3, f(0.055))
-    rpad = f(0.04)
-    rc = SD / 2 - rpad - ring_w / 2       # 环中心线半径
-    _ring(img, SD, cx, cy, rc, ring_w, ring_rgb, glow)
-    if sweep is not None:
-        _sweep(img, SD, cx, cy, rc, ring_w, sweep, sweep_rgb, tail=sweep_tail)
-    bw = max(2.0, f(0.016))               # 内外边框：与环同底色、够宽 → 缩放后平滑不锯齿，框住亮环边缘
-    _ring(img, SD, cx, cy, rc + ring_w / 2, bw, ring_rgb, glow=0.0)
-    _ring(img, SD, cx, cy, rc - ring_w / 2, bw, ring_rgb, glow=0.0)
-
-    output_size = output_size or D
-    return img.resize((output_size, output_size), Image.LANCZOS)  # 缩回显示尺寸 → 抗锯齿
 
 
 def run_overlay(state):
-    """屏幕右下角常驻的状态控件：聆听=绿(进度环+倒计时)，休眠=灰，内含随麦克风音量
-    跳动的声音波形。Pillow 抗锯齿渲染 + Win32 分层窗口(逐像素 alpha)，边缘平滑无锯齿。
-    右键弹菜单退出，退出后才整体消失。跑在调用方起的独立线程里(见 voice_input.py)，
-    Ctrl+C(SIGINT) 只能在主线程注册，不在这里处理——由 voice_input.py 的 main() 注册。"""
+    """单一视觉轮廓承载小猫与缓存文字；原生文字区在动画结束后恢复交互。
+    不激活窗口，右键打开菜单，拖动小猫保存位置；状态仅通过 state 交换。
+    """
     from ctypes import wintypes
 
     u, g = ctypes.windll.user32, ctypes.windll.gdi32
@@ -323,7 +202,13 @@ def run_overlay(state):
         dpi = 96
     ui_scale = _dpi_scale(dpi)
     scaled = lambda px: max(1, round(px * ui_scale))
-    D = scaled(state.get("overlay_size", 72))
+    # 旧配置常留有 72px；新版统一缩小，显式更小的配置仍保留。
+    D = scaled(min(state.get("overlay_size", 48), 48))
+    gc = state.get("glass_cfg", {})
+    max_panel_h = scaled(gc.get("max_h", 240))
+    expanded_w = max(scaled(MIN_WIDTH), scaled(gc.get("width", panel.PANEL_W)) + scaled(24))
+    header_h = scaled(HEADER_HEIGHT)
+    idle_cat = scaled(44)  # 猫帧四周有透明边，44 在 48 的小圆里约占八成高，再大耳朵会碰到描边
 
     class SIZE(ctypes.Structure):
         _fields_ = [("cx", wintypes.LONG), ("cy", wintypes.LONG)]
@@ -384,8 +269,7 @@ def run_overlay(state):
             fn.argtypes = args
 
     system_font_px = _system_message_font_px(u)
-    TH = scaled(_OV_TH)
-    W, H = D, D + TH            # 窗口比控件高 TH，多出的顶部窄带画 token 飘字
+    W = H = D  # 保存位置以小猫为锚点，不随胶囊尺寸变化
 
     def get_work_area():
         """主屏工作区（排除任务栏）；API 失败时退回整块主屏。"""
@@ -395,13 +279,14 @@ def run_overlay(state):
         return 0, 0, u.GetSystemMetrics(0), u.GetSystemMetrics(1)
 
     work_area = get_work_area()
-    saved_offset = state.get("overlay_offset")
-    if not (isinstance(saved_offset, (list, tuple)) and len(saved_offset) == 2):
-        saved_offset = None  # 旧版 overlay_pos 是绝对坐标；显示器变化后失效，迁移为默认右下角。
-    # 定位函数使用基础尺寸；这里按实际缩放后的窗口尺寸修正到同一右下角锚点。
-    right_gap = scaled(saved_offset[0] if saved_offset else _OV_RIGHT_GAP)
-    bottom_gap = scaled(saved_offset[1] if saved_offset else _OV_BOTTOM_GAP)
-    pos_x, pos_y = _overlay_position(work_area, (right_gap, bottom_gap), (W, H))
+    # 新布局独立保存锚点，旧版右下角位置不把新版胶囊带回屏幕边缘。
+    def initial_position():
+        offset = state.get("capsule_offset")
+        if isinstance(offset, (list, tuple)) and len(offset) == 2:
+            return _overlay_position(work_area, tuple(round(v * ui_scale) for v in offset), (W, H))
+        return default_position(work_area, D, scaled(24))
+
+    pos_x, pos_y = initial_position()
 
     def blit(target, img, x, y):
         """把 RGBA 图预乘 alpha 后经 UpdateLayeredWindow 逐像素贴到 target 窗口的屏幕 (x,y)。"""
@@ -434,11 +319,18 @@ def run_overlay(state):
         g.DeleteDC(memdc)
         u.ReleaseDC(None, screen)
 
-    _ring_cur = list(_SLEEP_RING_RGB)  # 底环色平滑过渡的当前值，逐帧趋近目标
-    _hue = [0.0]                        # 说话时颜色明暗呼吸的相位累加器（按速度推进，不因变速跳变）
-    _sweep_ang = [0.0]                  # 流光中心角度累加器（变速不跳变；休眠不推进也不画）
-    _tprev = [time.time()]
-    _last_img = [None]                  # 最近一帧成品图：拖动时用它即时重贴，跟手不等 80ms 定时器
+    idle_shape = (D, D, D / 2, 0, 0, (D - idle_cat) / 2, (D - idle_cat) / 2, idle_cat)
+    morph = Morph(idle_shape)
+    _last_img = [None]
+    _direction = [None]
+    _buttons = [{}]
+    _pressed = [None]
+    _copied_until = [0.0]  # 点复制后标题栏显示"已复制"到此时刻
+    _folded = [False]      # 点猫收起：保留缓存只缩回小圆，再点猫展开
+    _cat_rect = [(0, 0, 0, 0)]  # 当前帧猫在窗口内的位置，供点击命中
+    _speaking = [False]
+    _last_warn = [""]
+    _timer_ms = [80]
 
     def render():
         """渲染当前状态并通过 UpdateLayeredWindow 贴到屏幕（逐像素 alpha）。"""
@@ -482,49 +374,6 @@ def run_overlay(state):
                         cat = frames["blink"] if now % 4.0 < 0.12 else frames["stand"]
                 else:                                             # 休眠：趴下睡觉
                     cat = frames["sleep1" if int(now * 1.1) % 2 else "sleep0"]
-        from PIL import Image
-        img = Image.new("RGBA", (W, H), (0, 0, 0, 0))
-        # 环三档：①休眠=冷静蓝呼吸、无流光 ②激活静默=暗底环+流光缓慢扫 ③说话/识别=流光快速扫。
-        # 底环色经 _lerp_rgb 渐变（休眠↔激活不突变）；流光头部角度按当前速度累加（变速不跳变）。
-        dt = min(0.2, now - _tprev[0]); _tprev[0] = now
-        speaking = state["mode"] != "sleep" and bool(
-            state.get("speaking") or state["status"] == "transcribing"
-            or state.get("llm_busy") or state.get("rbuf"))
-        sweep_rgb = _SWEEP_RGB
-        sweep_tail = 0.7
-        if warming:
-            target = _ACTIVE_RING_RGB                            # 冷启动：纯色环，无流光，无呼吸
-            sweep = None
-        elif state["mode"] == "sleep":
-            v = 0.80 + 0.20 * (0.5 + 0.5 * math.sin(now * 1.6))  # 呼吸：明暗轻微起伏
-            target = tuple(c * v for c in _SLEEP_RING_RGB)
-            sweep = None                                         # 休眠：不出现流光
-        else:
-            sweep_rgb = (255, 255, 255)                          # 流光=白光扫过
-            _sweep_ang[0] += dt * (10.4 if speaking else 1.1)    # 说话≈0.6s一圈(很快)，静默≈6s(缓慢)
-            sweep = _sweep_ang[0]
-            sweep_tail = 0.32 if speaking else 0.7               # 说话时收窄成短彗尾，避免快扫拖成整圈白
-            if speaking:
-                _hue[0] += dt * (1 / 1.4)                         # 说话时颜色明暗呼吸的速度
-                target = _speaking_ring_rgb(_hue[0])
-            else:
-                target = _ACTIVE_RING_RGB                        # 非说话：固定色，不随时间变化
-        _ring_cur[:] = _lerp_rgb(_ring_cur, target, 0.35)
-        ring_rgb = tuple(int(round(c)) for c in _ring_cur)
-        img.alpha_composite(_overlay_image(cat, ring_rgb, glow=0.0, sweep=sweep,
-                                           sweep_rgb=sweep_rgb, sweep_tail=sweep_tail,
-                                           output_size=D), (0, TH))
-        if not busy:
-            age = now - state.get("tok_time", 0)
-            if state.get("tok_time", 0) and age < 10:       # 最近一轮 token：显示 10s，末 3s 淡出
-                fade = 1.0 if age < 7 else (10 - age) / 3.0
-                _draw_tokens(img, W, TH, state["tok_in"], state["tok_out"], fade,
-                             max(11, round(system_font_px * 0.8)))
-
-        _last_img[0] = img
-        blit(hwnd, img, pos_x, pos_y)
-
-        # 玻璃面板：右边缘紧贴猫左侧(留 2px 缝)、底边对齐猫底边，文字多时只往上撑；空文字则隐藏。
         if state["mode"] == "sleep" and glass.editing:
             # 编辑到一半就静默超时/说了休眠词进休眠：缓存已被 enter_sleep 清空，但编辑态若不
             # 一并退出，update() 会因 self.editing 跳过刷新，面板就卡在编辑界面不随之隐藏。
@@ -536,21 +385,18 @@ def run_overlay(state):
             clean, raw, low_conf = "", "", False
         # 状态提示靠 hint 颜色（蓝灰）跟绿色正文分开；整理状态不区分模式，一律"整理中"
         hint = ""
-        dots = "…" * (1 + int(now * 2) % 3)
+        dots = "…"  # 固定提示宽度，避免无正文时胶囊跟随省略号反复伸缩
         if state["mode"] == "awake":
             if state.get("warming"):
                 elapsed = now - state.get("warming_start", now)
                 remain = max(0, 10 - int(elapsed))
-                hint = f"正在启动推理引擎并加载模型…{remain}s"
+                hint = f"正在启动推理引擎并加载模型…剩余 {remain} 秒"
             elif state.get("speaking"):
                 hint = f"正在说话{dots}"
             elif state["status"] == "transcribing":
-                hint = f"识别中{dots}"
+                hint = f"正在识别{dots}"
             elif pbuf is not None and pbuf.cleaning_mode:
-                hint = f"整理中{dots}"
-            elif pbuf is not None and pbuf.countdown is not None:
-                secs = int(pbuf.countdown) + 1
-                hint = f"{secs}秒后整理"
+                hint = f"正在整理{dots}"
         # 警告行（红色，"没找到输入框"等），到期自动消失
         warn_entry = state.get("warn")
         warn_text = ""
@@ -564,9 +410,58 @@ def run_overlay(state):
         if not_ready:
             hint = ""
             warn_text = _downloading_hint(runtime)
-        # 面板锚点由当前窗口位置实时推出（拖动后跟随）：猫左=窗口左 pos_x，猫底=pos_y+TH+D
-        glass.update(clean, raw, hint, pos_x - 2, pos_y + TH + D, low_conf=low_conf,
-                     warn=warn_text, warm=bool(state.get("warming")))
+        if state["mode"] == "sleep":
+            _folded[0] = False  # 收起只管本次唤醒；下次唤醒的启动提示等要照常弹出
+            glass.place(0, 0, False)
+            return
+        if (state.get("speaking") and not _speaking[0]) or (warn_text and warn_text != _last_warn[0]):
+            _folded[0] = False  # 收起后又开口说话/来了新警告：自动展开，别让新内容藏着
+        _speaking[0], _last_warn[0] = bool(state.get("speaking")), warn_text
+        anchor = (pos_x, pos_y)
+        _direction[0] = expansion_direction(work_area, anchor, D, (expanded_w, max_panel_h), _direction[0])
+        room_w, room_h = expansion_bounds(work_area, anchor, D, _direction[0])
+        available_w = max(D, min(expanded_w, room_w))
+        available_h = max(D, min(max_panel_h, room_h))
+        glass.prepare(clean, raw, hint, warn_text, low_conf,
+                      max(scaled(24), available_h - header_h - scaled(16)), available_w - scaled(24))
+        expanded = glass.present and not _folded[0]
+        text_xy = (scaled(12), header_h + scaled(4))
+        if expanded:
+            width = min(available_w, max(scaled(MIN_WIDTH), glass.w + scaled(24)))
+            height = min(available_h, max(D, header_h + glass.h + scaled(16)))
+            dx, dy = expansion_offset(work_area, anchor, D, (width, height), _direction[0])
+            target = (width, height, scaled(16), dx, dy, scaled(8), scaled(3), scaled(30))
+        else:
+            target = idle_shape
+        shape = morph.move(target, time.monotonic())
+        size, dx, dy, cat_x, cat_y, cat_size = shape[:3], *shape[3:]
+        progress = max(0, min(1, (size[0] - D) / max(1, (target[0] if expanded else morph.start[0]) - D)))
+        rgb = tuple((glass.bg_color >> shift) & 255 for shift in (0, 8, 16))
+        img = draw_capsule(size, D, cat, rgb, _BORDER_RGB,
+                           glass.snapshot if morph.moving else None, text_xy, progress,
+                           (cat_x, cat_y), cat_size, scaled(1))
+        # 切换方向的动画途中也不能越过工作区（尤其是拖到另一个角落时）。
+        wx = max(work_area[0], min(pos_x + round(dx), work_area[2] - img.width))
+        wy = max(work_area[1], min(pos_y + round(dy), work_area[3] - img.height))
+        _buttons[0] = {}
+        _cat_rect[0] = (cat_x, cat_y, cat_x + cat_size, cat_y + cat_size)
+        if progress > 0.65:
+            pt = wintypes.POINT()
+            u.GetCursorPos(ctypes.byref(pt))
+            hover = hit_button(button_rects(img.width, ui_scale), pt.x - wx, pt.y - wy)
+            rects = draw_toolbar(img, ui_scale, hover, bool(clean or raw), glass.editing,
+                                 bool(state.get("panel_sending")), (progress - 0.65) / 0.35,
+                                 notice="已复制" if now < _copied_until[0] else "")
+            if expanded and not morph.moving:
+                _buttons[0] = rects
+        _last_img[0] = img
+        blit(hwnd, img, wx, wy)
+        glass.place(wx + text_xy[0], wy + text_xy[1], expanded and not morph.moving)
+        # Windows 定时器常为 15.6ms 粒度；请求 16ms 容易进位到约 31ms。
+        interval = 15 if morph.moving else 80
+        if interval != _timer_ms[0]:
+            u.SetTimer(hwnd, 1, interval, None)
+            _timer_ms[0] = interval
 
     def open_main():
         """拉起主界面（圆环右键菜单、托盘左键/菜单共用）。
@@ -612,15 +507,43 @@ def run_overlay(state):
         _, _, right, bottom = work_area
         offset = [round((right - (x + W)) / ui_scale),
                   round((bottom - (y + H)) / ui_scale)]
-        state["overlay_offset"] = offset
+        state["capsule_offset"] = offset
         try:
             with open(CONFIG_PATH, "r", encoding="utf-8") as fp:
                 cfg = json.load(fp)
-            cfg["overlay_offset"] = offset
+            cfg["capsule_offset"] = offset
             with open(CONFIG_PATH, "w", encoding="utf-8") as fp:
                 json.dump(cfg, fp, ensure_ascii=False, indent=2)
         except Exception as e:
             print(f"[warn] 记住小圆窗位置失败：{e}")
+
+    def perform_action(action):
+        pbuf = state.get("panel")
+        if glass.editing:
+            if action == "edit":  # 编辑中其余键已变灰不响应；再点编辑键＝保存并退出
+                glass._end_edit(save=True)
+        elif pbuf is not None and not state.get("panel_sending"):
+            if action == "copy":
+                import pyperclip
+                text = "".join(pbuf.text_parts[:2])
+                if text:
+                    try:
+                        pyperclip.copy(text)
+                        _copied_until[0] = time.time() + 1.5
+                    except Exception as exc:
+                        print(f"[warn] 复制缓存失败：{exc}")
+                        state["warn"] = ("复制失败，请稍后重试。", time.time() + 5)
+            elif action == "edit" and (pbuf.text_parts[0] or pbuf.text_parts[1]):
+                glass._start_edit()
+            elif action == "polish" and not pbuf.cleaning_mode:
+                # 与语音"文本整理"同一入口；要调本地模型好几秒，放后台线程别卡住界面，
+                # 期间面板底部照常显示"正在整理…"
+                threading.Thread(target=pbuf.trigger_polish_now, daemon=True).start()
+            elif action == "send" and state.get("send_panel"):
+                if pbuf.text_parts[0] or pbuf.text_parts[1]:
+                    state["send_panel"]()
+        state["last_activity"] = time.time()
+        render()
 
     def wndproc(hwnd, msg, wp, lp):
         nonlocal pos_x, pos_y, work_area
@@ -631,7 +554,14 @@ def run_overlay(state):
         if msg == 0x0205:        # WM_RBUTTONUP
             show_menu()
             return 0
-        if msg == 0x0201:        # WM_LBUTTONDOWN：开始拖动
+        if msg == 0x0021:        # MA_NOACTIVATE：工具按钮不能抢走原输入框焦点。
+            return 3
+        if msg == 0x0201:        # WM_LBUTTONDOWN：按钮按下或拖动标题栏
+            x, y = ctypes.c_short(lp & 0xFFFF).value, ctypes.c_short((lp >> 16) & 0xFFFF).value
+            _pressed[0] = hit_button(_buttons[0], x, y)
+            if _pressed[0]:
+                u.SetCapture(hwnd)
+                return 0
             pt = wintypes.POINT()
             u.GetCursorPos(ctypes.byref(pt))
             _drag.update(on=True, gx=pt.x, gy=pt.y, px=pos_x, py=pos_y)
@@ -641,26 +571,38 @@ def run_overlay(state):
             if _drag["on"]:
                 pt = wintypes.POINT()
                 u.GetCursorPos(ctypes.byref(pt))
-                pos_x = _drag["px"] + (pt.x - _drag["gx"])
-                pos_y = _drag["py"] + (pt.y - _drag["gy"])
+                pos_x = max(work_area[0], min(work_area[2] - D, _drag["px"] + (pt.x - _drag["gx"])))
+                pos_y = max(work_area[1], min(work_area[3] - D, _drag["py"] + (pt.y - _drag["gy"])))
                 if _last_img[0] is not None:
-                    blit(hwnd, _last_img[0], pos_x, pos_y)  # 即时重贴，跟手
+                    render()  # 背景与原生文字一起移动
             return 0
-        if msg == 0x0202:        # WM_LBUTTONUP：结束拖动，落盘记住位置
+        if msg == 0x0202:        # WM_LBUTTONUP：同一图标内松开才触发；拖动不误点。
+            if _pressed[0]:
+                action, _pressed[0] = _pressed[0], None
+                u.ReleaseCapture()
+                x, y = ctypes.c_short(lp & 0xFFFF).value, ctypes.c_short((lp >> 16) & 0xFFFF).value
+                if hit_button(_buttons[0], x, y) == action:
+                    perform_action(action)
+                return 0
             if _drag["on"]:
                 _drag["on"] = False
                 u.ReleaseCapture()
                 if (pos_x, pos_y) != (_drag["px"], _drag["py"]):  # 真挪动过才写盘（纯点击不写）
                     save_pos(pos_x, pos_y)
+                else:  # 纯点击猫：有缓存时收起/展开切换
+                    x, y = ctypes.c_short(lp & 0xFFFF).value, ctypes.c_short((lp >> 16) & 0xFFFF).value
+                    l, t, r, b = _cat_rect[0]
+                    if glass.present and l <= x < r and t <= y < b:
+                        if not _folded[0] and glass.editing:
+                            glass._end_edit(save=True)
+                        _folded[0] = not _folded[0]
+                        render()
             return 0
         if msg in (0x007E, 0x001A):  # WM_DISPLAYCHANGE / WM_SETTINGCHANGE（分辨率、任务栏变化）
             work_area = get_work_area()
-            offset = state.get("overlay_offset")
-            right_gap = scaled(offset[0] if offset else _OV_RIGHT_GAP)
-            bottom_gap = scaled(offset[1] if offset else _OV_BOTTOM_GAP)
-            pos_x, pos_y = _overlay_position(work_area, (right_gap, bottom_gap), (W, H))
+            pos_x, pos_y = initial_position()
             if _last_img[0] is not None:
-                blit(hwnd, _last_img[0], pos_x, pos_y)
+                render()
             return 0
         if msg == 0x0113:        # WM_TIMER
             if state["quit"]:
@@ -710,14 +652,13 @@ def run_overlay(state):
     # WS_EX_LAYERED|WS_EX_TOPMOST|WS_EX_TOOLWINDOW|WS_EX_NOACTIVATE, WS_POPUP
     hwnd = u.CreateWindowExW(0x80000 | 0x8 | 0x80 | 0x8000000, "VoiceInputOverlay", "",
                             0x80000000, pos_x, pos_y, W, H, None, None, hinst, None)
-    # 玻璃文字面板：原生 DWM 亚克力毛玻璃窗口（真·模糊背后桌面），点击穿透、置顶。
-    gc = state.get("glass_cfg", {})
+    # 原生文字区复用缓存编辑语义，外轮廓统一由胶囊绘制。
 
     def on_panel_edit_start():
         state["panel_editing"] = True  # 暂停语音识别（worker）+ 圆环置顶重申，见对应位置
         pbuf = state.get("panel")
         if pbuf is not None:
-            pbuf.pause()  # 编辑中暂停自动整理，别拿整理结果盖用户正在改的字
+            pbuf.pause()  # 编辑中暂停主动整理，别拿整理结果盖用户正在改的字
 
     def on_panel_edit_end(text):
         state["panel_editing"] = False
@@ -726,9 +667,9 @@ def run_overlay(state):
             if pbuf is not None:
                 pbuf.replace_all(text)
         if pbuf is not None:
-            pbuf.resume()  # 退出编辑态，恢复自动整理
+            pbuf.resume()  # 退出编辑态，恢复主动整理
 
-    glass = panel.GlassWindow(
+    glass = CapsuleText(
         hinst,
         tint=gc.get("tint", ui_style.PANEL_TINT),
         text_rgb=tuple(gc.get("text_rgb", ui_style.PANEL_TEXT_RGB)),
@@ -737,17 +678,18 @@ def run_overlay(state):
         low_conf_rgb=tuple(gc.get("low_conf_rgb", ui_style.PANEL_LOW_CONF_RGB)),
         width=scaled(gc.get("width", panel.PANEL_W)),
         font_size=_panel_font_size(gc.get("font_size"), dpi, system_font_px),
-        pad=scaled(panel._PAD),
+        pad=scaled(4),
         max_h=scaled(gc.get("max_h", 480)),
         on_edit_start=on_panel_edit_start,
         on_edit_end=on_panel_edit_end,
     )
+    glass.u.SetWindowLongPtrW(glass.hwnd, -8, hwnd)  # 原生文字区归属外轮廓，置顶时不会互相覆盖
     if state["mode"] == "sleep":       # 启动即处于休眠：直接不显示，避免先露一帧再隐藏的闪烁
         _visible[0] = False
     else:
         render()
         u.ShowWindow(hwnd, 4)  # SW_SHOWNOACTIVATE
-    u.SetTimer(hwnd, 1, 80, None)
+    u.SetTimer(hwnd, 1, _timer_ms[0], None)
 
     # 系统托盘常驻图标：左键/双击拉起主界面，右键弹与圆环同款菜单（主界面 / 退出）。还没初始化完时
     # 用 tooltip 带一句"正在初始化"——纯被动，鼠标划过去才看得到，不会像悬浮窗那样无端弹出来。

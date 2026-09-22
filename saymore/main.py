@@ -202,7 +202,8 @@ def main():
              "import_trigger": str(CONFIG_PATH.parent / ".import_trigger"),  # GUI 导入把选中路径写这、由本进程接住
              "restart_trigger": str(CONFIG_PATH.parent / ".restart_trigger"),  # 设置窗口要求重启生效，写这个文件触发
              "overlay_offset": cfg.get("overlay_offset"),  # 距工作区右下角距离；跨分辨率保持相对位置
-             "overlay_size": cfg.get("overlay_size_px", 72),  # 标准逻辑直径；overlay 按显示器 DPI 换算
+             "capsule_offset": cfg.get("capsule_offset"),
+             "overlay_size": cfg.get("overlay_size_px", 48),  # 标准逻辑直径；overlay 按显示器 DPI 换算
              "glass_cfg": {  # 玻璃面板外观参数传给 run_overlay（overlay 只依赖 state，不碰 cfg）
                  "tint": cfg.get("panel_tint", ui_style.PANEL_TINT),
                  "text_rgb": cfg.get("panel_text_rgb", ui_style.PANEL_TEXT_RGB),
@@ -588,7 +589,7 @@ def main():
     confirm_words = set(cfg.get("confirm_words", []))
     undo_words = set(cfg.get("undo_words", []))
     clear_words = set(cfg.get("clear_words", []))
-    polish_words = set(cfg.get("polish_words", []))
+    polish_words = set(cfg.get("polish_words", [])) | {"整理"}
     sleep_words = set(cfg.get("sleep_words", []))
     quit_words = set(cfg.get("quit_words", []))
     reminder_enter_words = set(cfg.get("reminder_enter_words", []))
@@ -649,41 +650,45 @@ def main():
         state["cmd_cue_i"] = i + 1
         threading.Thread(target=tts.play_cue, args=(_CMD_ACK_CUES[i % len(_CMD_ACK_CUES)],), daemon=True).start()
 
+    def send_buffer():
+        """语音命令与标题栏按钮共用发送流程，统一检查焦点、整理和记录。"""
+        state["nod_until"] = time.time() + 0.9  # 执行命令：猫点头致意
+        # 前置探测：前台窗口若找不到输入框（焦点在任务栏/桌面等），提示用户重定位，
+        # 不动面板缓存——避免把文字粘到"无关焦点"造成静默丢失。
+        if not focus_window(focus_title, focus_input):
+            warn_msg = "没找到输入框，请先将鼠标光标放置到输入框里，再说发送指令。"
+            state["warn"] = (warn_msg, time.time() + 15)  # 面板红字提示 15 秒后自动消失
+            if not reminder.nagging:
+                threading.Thread(target=tts.speak, args=(warn_msg,), daemon=True).start()
+            print("[info] 前台窗口未找到输入框，未发送；面板缓存保留，请点入输入框后重说「发送」")
+            return True
+        state["warn"] = None  # 找到了输入框：清掉上次可能留下的红字警告
+        sent = True
+        if state.get("panel") is not None:
+            sent = state["panel"].flush_all()  # 先把面板里攒的话整理回填，再回车
+        if not sent:  # 整块置信度不足：扣下不发也不按回车，缓存原样留着，等下一轮/用户重说覆盖
+            if not reminder.nagging:
+                threading.Thread(target=tts.play_cue, args=("这句没整理好，麻烦再说一遍。",), daemon=True).start()
+            print("[info] 整理置信度不足，已扣下未发送")
+            return True
+        flush_pending_audio()
+        focus_window(focus_title, focus_input)
+        if auto_enter:
+            keyboard.send("enter")
+        # 真正发送了才算数：这一刻才写历史/热词。缓存窗口本身可编辑，回填进输入框的文本
+        # （last_filled，含用户在面板里的手改）就是最终版，直接拿来写历史，不再回读输入框。
+        # 只静默超时/噪音误触发都不会走到这里，不会污染历史。
+        send_text = state.get("last_filled", "").strip()
+        if send_text:
+            hotwords.record(send_text)
+        print(f"[done] 发送（{'回车' if auto_enter else '不回车'}）")
+        ack_cue()
+        return True
+
     def run_global_command(cmd):
         """整句命令在听写/提醒两种模式下都生效：命中即执行并返回 True，否则 False。"""
         if cmd in send_words:
-            state["nod_until"] = time.time() + 0.9  # 执行命令：猫点头致意
-            # 前置探测：前台窗口若找不到输入框（焦点在任务栏/桌面等），提示用户重定位，
-            # 不动面板缓存——避免把文字粘到"无关焦点"造成静默丢失。
-            if not focus_window(focus_title, focus_input):
-                warn_msg = "没找到输入框，请先将鼠标光标放置到输入框里，再说发送指令。"
-                state["warn"] = (warn_msg, time.time() + 15)  # 面板红字提示 15 秒后自动消失
-                if not reminder.nagging:
-                    threading.Thread(target=tts.speak, args=(warn_msg,), daemon=True).start()
-                print("[info] 前台窗口未找到输入框，未发送；面板缓存保留，请点入输入框后重说「发送」")
-                return True
-            state["warn"] = None  # 找到了输入框：清掉上次可能留下的红字警告
-            sent = True
-            if state.get("panel") is not None:
-                sent = state["panel"].flush_all()  # 先把面板里攒的话整理回填，再回车
-            if not sent:  # 整块置信度不足：扣下不发也不按回车，缓存原样留着，等下一轮/用户重说覆盖
-                if not reminder.nagging:
-                    threading.Thread(target=tts.play_cue, args=("这句没整理好，麻烦再说一遍。",), daemon=True).start()
-                print("[info] 整理置信度不足，已扣下未发送")
-                return True
-            flush_pending_audio()
-            focus_window(focus_title, focus_input)
-            if auto_enter:
-                keyboard.send("enter")
-            # 真正发送了才算数：这一刻才写历史/热词。缓存窗口本身可编辑，回填进输入框的文本
-            # （last_filled，含用户在面板里的手改）就是最终版，直接拿来写历史，不再回读输入框。
-            # 只静默超时/噪音误触发都不会走到这里，不会污染历史。
-            send_text = state.get("last_filled", "").strip()
-            if send_text:
-                hotwords.record(send_text)
-            print(f"[done] 发送（{'回车' if auto_enter else '不回车'}）")
-            ack_cue()
-            return True
+            return send_buffer()
         if cmd in confirm_words:
             state["nod_until"] = time.time() + 0.9
             click_permission_button(focus_title)  # 优先"总是允许"，否则"允许一次"
@@ -748,7 +753,6 @@ def main():
 
     buffer = panel.TextBuffer(
         polish=_run_polish, paste=commit_text,
-        quiet_seconds=cfg.get("polish_quiet_seconds", 5.0),
         immediate=not cfg.get("panel", True),
         min_confidence=cfg.get("polish_min_confidence", 0.6),
         polish_mode=cfg.get("polish_mode", "小范围整理"),
@@ -804,7 +808,7 @@ def main():
             print("[done] 清空：面板缓存已重置")
             ack_cue()
             return
-        buffer.add(text)  # 攒进面板缓冲，后台每 interval 秒全窗口整理；只有说"发送"才回填输入框
+        buffer.add(text)  # 只攒识别原文；发送或主动说“整理”才整理
         # 即时回应一声"嗯/好"，让用户知道这句已听到——不等后台整理（那要好几秒）。
         # 但距上一声不够 hear_cue_min_gap 秒就跳过，免得说话密时反馈过密。
         now = time.time()
@@ -869,9 +873,30 @@ def main():
         if reminder.is_ack(cmd) or cmd in sleep_words:
             reminder.stop_nag()  # 回一声确认，并触发 on_nag_stop → 若是催办唤醒的则回休眠
 
+    panel_send = object()
+
+    def request_panel_send():
+        if not state.get("panel_sending"):
+            state["panel_sending"] = True
+            state["last_activity"] = time.time()
+            seg_queue.put(panel_send)  # 与语音按同一队列串行执行，不阻塞界面动画。
+
+    state["send_panel"] = request_panel_send
+
     def worker():
         while True:
             seg = seg_queue.get()
+            if seg is panel_send:
+                try:
+                    if state["mode"] != "sleep" and state.get("panel") is not None and state["panel"].text.strip():
+                        send_buffer()
+                except Exception as exc:
+                    print(f"[error] 标题栏发送失败：{exc}")
+                    state["warn"] = ("发送失败，请检查输入框后重试。", time.time() + 15)
+                finally:
+                    state["panel_sending"] = False
+                    state["last_activity"] = time.time()
+                continue
             if seg is None:
                 return
             if state["mode"] == "sleep" or state.get("panel_editing"):
@@ -908,7 +933,7 @@ def main():
                     and time.time() - state.get("last_seg_time", 0) > cfg.get("reminder_flush_seconds", 2.0):
                 flush_reminder_buffer()
             # 听写模式的缓存不再因静默自动回填——只有说"发送"才回填（见 run_global_command）
-            if state["mode"] not in ("awake", "reminder") or not seg_queue.empty():
+            if state["mode"] not in ("awake", "reminder") or not seg_queue.empty() or state.get("panel_sending"):
                 continue
             # 提醒对话用更短的静默超时，避免上下文越拖越长
             limit = cfg.get("reminder_idle_seconds", 60) if state["mode"] == "reminder" else cfg["sleep_after_seconds"]

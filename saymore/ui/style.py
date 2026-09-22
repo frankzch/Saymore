@@ -18,13 +18,13 @@ FONT_FACE = "Microsoft YaHei UI"
 FONT = (FONT_FACE, 10)
 FONT_SMALL = (FONT_FACE, 9)
 
-# 玻璃缓存面板（panel.GlassWindow）同主题的默认值：底色同 BG 的磨砂（AARRGGBB），
-# 已整理=绿色（整理完成），未整理=黑色（原始转写），状态提示=蓝灰（底部状态栏）
-PANEL_TINT = "E6F5F5F7"
-PANEL_TEXT_RGB = [34, 139, 34]
-PANEL_RAW_TEXT_RGB = [0, 0, 0]
-PANEL_HINT_TEXT_RGB = [120, 132, 158]  # 蓝灰：跟绿色正文换色相，避免看着像正文延续
-PANEL_LOW_CONF_RGB = [255, 59, 48]  # 整理置信度偏低：跟 DANGER 同色的红
+# 悬浮小圆/缓存窗口：浅薄荷实色底（AARRGGBB）+ 绿描边，跟猫 logo 的浅色风格搭。
+# 已整理=深绿（整理完成），未整理=近黑（原始转写），状态提示=灰绿（底部状态栏）
+PANEL_TINT = "FFE3F5EA"
+PANEL_TEXT_RGB = [21, 128, 61]
+PANEL_RAW_TEXT_RGB = [17, 24, 39]
+PANEL_HINT_TEXT_RGB = [96, 118, 104]
+PANEL_LOW_CONF_RGB = [220, 38, 38]
 
 
 def round_corners(tk_root):

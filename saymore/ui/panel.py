@@ -1,15 +1,15 @@
 # -*- coding: utf-8 -*-
 """右下角玻璃文字面板：识别句全部攒进缓冲、显示在半透明磨砂窗口里，不立刻粘贴，
 只有用户显式说"发送"才整体回填输入框——其余任何情况（攒多少字、静默多久、进休眠）
-都不自动回填，全留在缓存里等指令。用户停止说话后等 quiet_seconds 秒自动按所选模式
+都不自动回填，全留在缓存里等指令。仅发送或说“整理”时按所选模式
 对全文整理一次并冻结（四种模式一致），整理结果就摆在面板里供用户过目、双击手改；
-发送/说"文本整理"时若还有没整理过的新内容，收尾再对全文跑一次。
+连续听写和停顿只缓存识别原文，不自动整理；整理只由“发送”收尾或显式整理命令触发。
 
-- TextBuffer：停说后自动整理 + 仅发送/flush_all 时回填。可单测。
+- TextBuffer：命令触发整理 + 仅发送/flush_all 时回填。可单测。
 - GlassWindow：Win32 无边框分层窗口（WS_EX_LAYERED 整窗统一半透）+ 圆角，里面嵌一个
   RichEdit 控件（真·系统文本控件，不是画出来的字）。默认只读，文字可鼠标拖选、右键
   菜单复制；点一下正文即可编辑（背景变色提示"编辑中"），Enter 保存/Esc 放弃/点外部
-  失焦按保存处理，编辑期间暂停 update() 覆写 + 暂停自动整理（外部还需自行暂停语音识别，见调用方）。
+  失焦按保存处理，编辑期间暂停 update() 覆写 + 暂停主动整理（外部还需自行暂停语音识别，见调用方）。
   配色/透明度走配置，便于不改代码微调。
 """
 import ctypes
@@ -147,12 +147,13 @@ class GlassWindow:
         self.bg_color = (bb << 16) | (bgc << 8) | br
         # 编辑态底色：往暖黄混一点，跟平时的冷灰底一眼区分开，提示"现在能打字"
         blend = lambda a, target: round(a + (target - a) * 0.35)
-        er, eg, eb = blend(br, 255), blend(bgc, 240), blend(bb, 200)
+        warm = (255, 240, 200) if br + bgc + bb > 384 else (120, 96, 50)  # 深色底混暖褐，别混成发灰的中间色
+        er, eg, eb = blend(br, warm[0]), blend(bgc, warm[1]), blend(bb, warm[2])
         self.edit_bg_color = (eb << 16) | (eg << 8) | er
         self._setup_api()
         self.bg_brush = self.g.CreateSolidBrush(self.bg_color)
         self.edit_bg_brush = self.g.CreateSolidBrush(self.edit_bg_color)
-        self.thumb_brush = self.g.CreateSolidBrush(self.raw_color)  # 滚动条用中档灰，跟未整理文字同色
+        self.thumb_brush = self.g.CreateSolidBrush(self.hint_color)  # 滚动条用状态提示的中档灰，不抢正文
         self.font = self._make_font(font_size)
         self._register(hinst)
         self.hwnd = self._create(hinst)
@@ -612,7 +613,7 @@ _ENDERS = "。！？!?…；;\n"  # 挤出/回退时认的"完整一句"边界
 
 class TextBuffer:
     """未回填识别文字的缓冲，分三段：frozen（整理定稿）+ clean_text（用户手改后的定稿）
-    + raw_segs（还没整理的新句）。用户停止说话后等 quiet_seconds 秒触发整理：四种模式
+    + raw_segs（还没整理的新句）。仅发送或主动命令触发整理：四种模式
     一律对全文跑一次并冻结成 frozen，用户随即能在面板里看到整理结果、不满意就双击改；
     收尾（flush_all / trigger_polish_now）同样走全文。只有发送/flush_all 才整体回填
     输入框——攒多少字、静默多久都不自动回填。
@@ -636,26 +637,17 @@ class TextBuffer:
         self._speaking = False
         self._speech_ended_at = None    # 话音落时刻；None=没在倒计时
         self.cleaning_mode = None       # 后台正在跑的整理模式；None=没在整理。供面板显示"XX中…"
-        self._paused = False            # 面板编辑中：True 时跳过自动整理触发，避免和用户手改的字打架
+        self._paused = False            # 面板编辑中：True 时跳过主动整理触发，避免和用户手改的字打架
         self._edit_needs_polish = False  # 进入编辑态时是否还有未整理内容（倒计时没走完），决定保存后要不要接着整理
         self._needs_polish = False      # 自上次整理以来有过新内容？决定要不要再跑一次
         self._seg_lock = threading.Lock()
         self._commit_lock = threading.Lock()
         self._clean_lock = threading.Lock()
-        if not immediate:
-            threading.Thread(target=self._quiet_timer_worker, daemon=True).start()
 
     @property
     def countdown(self):
-        """剩余几秒触发整理；None=没在倒计时（正在说话/已整理完/无新内容/面板已空）。
-        面板文字为空（发送/回退/清空后）时直接 None，别让"X秒后整理"孤零零挂着。"""
-        t = self._speech_ended_at
-        if t is None or self._speaking:
-            return None
-        if not (self.raw_segs or self.clean_text or self.frozen):
-            return None
-        remain = self.quiet_seconds - (time.time() - t)
-        return remain if remain > 0 else None
+        """兼容旧调用方；听写期间不再安排自动整理。"""
+        return None
 
     def notify_speech_start(self):
         self._speaking = True
@@ -666,7 +658,7 @@ class TextBuffer:
         self._speech_ended_at = time.time()
 
     def pause(self):
-        """面板进入手动编辑态：暂停自动整理触发，别拿整理结果盖用户正在改的字。
+        """面板进入手动编辑态：暂停主动整理触发，别拿整理结果盖用户正在改的字。
         记下此刻是否还有没整理完的内容——倒计时没走完就双击编辑的话，保存后不能当成
         "用户已确认无需整理"，得接着走整理，否则这段文字永远不会被整理。"""
         self._paused = True
@@ -674,34 +666,11 @@ class TextBuffer:
             self._edit_needs_polish = bool(self.raw_segs)
 
     def resume(self):
-        """退出编辑态：恢复自动整理。倒计时期间时间没停，多半已到点，下一 tick 就会立刻触发一次。"""
+        """退出编辑态：允许主动整理。"""
         self._paused = False
 
-    def _quiet_timer_worker(self):
-        """停说后等 quiet_seconds 秒再触发整理：不分模式一律走全文，结果落进面板供用户过目/手改。
-        用 _needs_polish 当闸门——没有新内容就别拿同一段文字反复回炉。"""
-        while not self._stop:
-            time.sleep(0.5)
-            if self._paused:
-                continue
-            t = self._speech_ended_at
-            if t is None or self._speaking:
-                continue
-            if time.time() - t < self.quiet_seconds:
-                continue
-            with self._seg_lock:
-                has_work = self._needs_polish and bool(
-                    self.frozen or self.clean_text or self.raw_segs)
-            if has_work:
-                self._polish_pending()
-            # 只在时间戳没被新 speech-end 更新过时才清零：整理跑 LLM 那几秒里,
-            # 用户又说完一句时 notify_speech_end 会把 _speech_ended_at 更新成新的 T1;
-            # 若无条件清零,这个 T1 被抹掉,末尾几句永远不会再触发整理。
-            if self._speech_ended_at == t:
-                self._speech_ended_at = None
-
     def trigger_polish_now(self):
-        """不等 quiet_seconds 倒计时，立即触发一次整理（语音命令"文本整理"用）。走全文：
+        """按显式命令触发一次整理（语音命令"文本整理"用）。走全文：
         分段是全局判断，只看一小片窗口的话，话题切换落不进视野，模型永远不会分段。"""
         if self.immediate or self._paused:
             return
@@ -755,14 +724,14 @@ class TextBuffer:
             self._commit("", [text])
             return
         with self._seg_lock:
-            self.raw_segs.append(text)  # 只攒不回填、不挤出；整理交给后台定时线程
+            self.raw_segs.append(text)  # 只攒不回填；整理留给发送或显式命令
             self._needs_polish = True
 
     def flush_all(self):
         """整体回填。返回是否真的发出去了：整块置信度不足时扣下不发、缓存原样留着（等下一轮
         整理或用户重说覆盖），不清空、不悄悄丢内容——调用方据此决定要不要按回车。
         没内容可发（面板本来就空）也算 True，不算"被拦下"，交给调用方按老规矩处理。
-        收尾走 _polish_pending：倒计时没走完就说"发送"时，这里补上那一次全文整理。
+        收尾走 _polish_pending：说"发送"时，这里对未整理的内容做全文整理。
         只在有没整理过的新内容时才收尾;整理完用户又手改过的文本(落在 clean_text/frozen)
         不再重跑整理——用户既然亲手改了,就是最终版,别拿模型再翻一遍把用户改的字盖回去。"""
         with self._seg_lock:
@@ -862,9 +831,9 @@ class TextBuffer:
 
 if __name__ == "__main__":
     def _trigger(buf):
-        """模拟一次"话音落+等安静"触发整理。"""
+        """模拟用户主动说“整理”。"""
         buf.notify_speech_end()
-        buf._speech_ended_at = time.time() - buf.quiet_seconds - 0.1  # 跳过等待
+        buf.trigger_polish_now()
 
     def settle(buf):
         _trigger(buf)

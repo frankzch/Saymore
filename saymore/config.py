@@ -39,7 +39,7 @@ DEFAULT_CONFIG = {
     "simplified": True,          # True=用 OpenCC 把繁体统一转成简体
     "local_polish": True,        # True=回填前把攒的话过本地整理模型：走 llama-server+整理 LoRA
     "polish_mode": "小范围整理",  # 默认整理模式：小范围整理/深度整理/邮件整理/00后整理
-    "polish_quiet_seconds": 10.0,   # 停止说话后等多久自动触发整理(秒)
+    "polish_quiet_seconds": 10.0,   # 兼容旧配置，已停用自动整理计时
     "polish_min_confidence": 0.6,   # 整理置信度低于此值：面板里该段标红提示用户复核，不丢弃/不阻断回填
     "panel_low_conf_rgb": ui_style.PANEL_LOW_CONF_RGB,  # 整理置信度偏低：红色
     "hear_cue_min_gap": 3.0,     # 每识别一句回一声"嗯/好"的最小间隔(秒)
@@ -53,7 +53,8 @@ DEFAULT_CONFIG = {
     "panel_font_px": None,      # None=跟随 Windows 默认 UI 字体；数值=逻辑像素并按当前显示器 DPI 换算
     "panel_max_h": 240,
     "overlay": True,             # True=屏幕显示录音状态小圆点
-    "overlay_size_px": 72,       # 圆环标准逻辑直径；实际像素随当前显示器 DPI 自动换算
+    "overlay_size_px": 48,       # 圆环标准逻辑直径；实际像素随当前显示器 DPI 自动换算
+    "capsule_offset": None,      # 小圆拖动锚点；None 默认工作区右下角，卡片按周围空间展开
     "overlay_offset": None,      # 小圆窗距主屏工作区右下角 [右,下]；拖动后记住，换分辨率仍对齐
     # 无云端 LLM 配置：转写/四种整理/屏幕提词/历史热词全部走本地 llama-server + 多 LoRA
     "qwen_context_file": "terms.txt",
@@ -67,7 +68,7 @@ DEFAULT_CONFIG = {
     "confirm_words": ["弹框确认", "确认弹框"],
     "undo_words": ["回退", "撤销"],
     "clear_words": ["清空", "清空重来"],
-    "polish_words": ["文本整理", "立即整理"],
+    "polish_words": ["整理", "文本整理", "立即整理"],
     "sleep_words": ["休眠", "睡觉"],
     "quit_words": ["退出", "关闭程序"],
     "reminders_file": "reminders.json",  # 提醒数据存储路径（相对 _resolve）
