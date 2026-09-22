@@ -35,12 +35,13 @@ class CapsuleWindowTest(unittest.TestCase):
         buffer = Buffer()
         state = {"mode": "awake", "status": "awake", "levels": [], "quit": False,
                  "panel": buffer, "runtime": {"ready": True}, "glass_cfg": {"max_h": 240}}
-        views, sent, copied, errors = [], [], [], []
+        views, sent, copied, notices, errors = [], [], [], [], []
         opened = threading.Event()
         original_toolbar = overlay.draw_toolbar
 
         def draw_toolbar(*args, **kwargs):
             result = original_toolbar(*args, **kwargs)
+            notices.append(kwargs.get("notice", ""))
             if args[-1] >= 1:
                 opened.set()
             return result
@@ -114,6 +115,14 @@ class CapsuleWindowTest(unittest.TestCase):
                 self.assertEqual(sent, ["修改后的文字"])
                 self.assertFalse(view.editing)
                 self.assertEqual(rect().right - rect().left, diameter)
+                state["speaking"] = True
+                time.sleep(0.4)
+                bounds = rect()
+                self.assertGreater(bounds.right - bounds.left, diameter)
+                self.assertEqual(bounds.bottom - bounds.top, diameter)
+                self.assertIn("正在说话…", notices)
+                state["speaking"] = False
+                time.sleep(0.4)
                 buffer.text_parts = ("拖到左上角以后向右下展开。" * 15, "", False)
                 area = wintypes.RECT()
                 u.SystemParametersInfoW(0x0030, 0, ctypes.byref(area), 0)

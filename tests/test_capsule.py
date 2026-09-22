@@ -1,9 +1,12 @@
 import ctypes
 import unittest
 
+from PIL import Image
+
+from saymore.ui import panel
 from saymore.ui.capsule import (CapsuleText, Morph, default_position, draw_capsule,
                                 expansion_direction, expansion_bounds, expansion_offset)
-from saymore.ui.capsule_toolbar import button_rects, hit_button
+from saymore.ui.capsule_toolbar import HEADER_HEIGHT, button_rects, draw_toolbar, hit_button
 
 
 class MorphTest(unittest.TestCase):
@@ -61,6 +64,11 @@ class MorphTest(unittest.TestCase):
                 self.assertEqual(hit_button(rects, (l + r) // 2, (t + b) // 2), action)
             self.assertIsNone(hit_button(rects, 0, 0))
 
+    def test_toolbar_has_no_separator_line(self):
+        canvas = Image.new("RGBA", (300, 100))
+        draw_toolbar(canvas, 1)
+        self.assertEqual(canvas.getpixel((150, HEADER_HEIGHT))[3], 0)
+
     def test_outline_has_transparent_corners_and_solid_center(self):
         image = draw_capsule((48, 48, 24), 48, None, (236, 239, 245), (52, 199, 89))
         self.assertEqual(image.getpixel((0, 0))[3], 0)
@@ -86,6 +94,15 @@ class NativeCapsuleTest(unittest.TestCase):
         self.assertEqual(view._get_text(), "你好，世界。")
         colors = view.snapshot.convert("RGB").getcolors(view.w * view.h)
         self.assertGreater(len(colors), 2, "动画快照必须包含实际字形，不能只有底色")
+
+    def test_first_transcript_reflows_before_height_measurement(self):
+        view = self.view
+        view.prepare("", "", "正在识别…", "", False, 228, 340)
+        view.prepare("", "这是第一句话，用来测试缓存窗口的高度。", "", "", False, 228, 340)
+        line_h = view._line_h()
+        line_count = view.u.SendMessageW(view.edit, panel._EM_GETLINECOUNT, 0, 0)
+        expected = panel._text_area_height(line_count, line_h) + view.pad * 2
+        self.assertEqual(view.h, expected)
 
     def test_status_remains_visible_alongside_body(self):
         view = self.view

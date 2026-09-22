@@ -102,8 +102,6 @@ def draw_toolbar(canvas, scale, hover=None, enabled=True, editing=False, sending
         icon_size = round(17 * scale)
         layer.alpha_composite(_icon(action, icon_size, color),
                               (l + (r - l - icon_size) // 2, t + (b - t - icon_size) // 2))
-    draw.line((round(12 * scale), header, canvas.width - round(12 * scale), header),
-              fill=(190, 225, 202, 255), width=max(1, round(scale)))
     if opacity < 1:
         layer.putalpha(layer.getchannel("A").point(lambda a: round(a * max(0, opacity))))
     canvas.alpha_composite(layer)

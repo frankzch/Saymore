@@ -18,9 +18,9 @@ FONT_FACE = "Microsoft YaHei UI"
 FONT = (FONT_FACE, 10)
 FONT_SMALL = (FONT_FACE, 9)
 
-# 悬浮小圆/缓存窗口：浅薄荷实色底（AARRGGBB）+ 绿描边，跟猫 logo 的浅色风格搭。
-# 已整理=深绿（整理完成），未整理=近黑（原始转写），状态提示=灰绿（底部状态栏）
-PANEL_TINT = "FFE3F5EA"
+# 悬浮小圆/缓存窗口：效果图同款冷白蓝灰实色底（AARRGGBB），跟猫 logo 的浅色风格搭。
+# 已整理=深绿（整理完成），未整理=近黑（原始转写），状态提示=灰绿（标题栏）
+PANEL_TINT = "FFEFF7FD"
 PANEL_TEXT_RGB = [21, 128, 61]
 PANEL_RAW_TEXT_RGB = [17, 24, 39]
 PANEL_HINT_TEXT_RGB = [96, 118, 104]

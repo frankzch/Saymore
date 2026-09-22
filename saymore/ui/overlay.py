@@ -138,7 +138,7 @@ def _get_cat_frames():
 
 
 
-_BORDER_RGB = (52, 168, 83)  # 小圆与缓存窗口统一 1px 绿描边，在浅薄荷底和白底应用上都框得住
+_BORDER_RGB = (172, 231, 208)  # 效果图同款浅薄荷绿；小圆与缓存窗口统一 1px 描边
 
 
 def _downloading_hint(runtime):
@@ -383,14 +383,14 @@ def run_overlay(state):
         # 运行环境未就绪：面板只显示红色告警，正文/hint 全清空；用户去主界面「运行环境」tab 补齐
         if not_ready:
             clean, raw, low_conf = "", "", False
-        # 状态提示靠 hint 颜色（蓝灰）跟绿色正文分开；整理状态不区分模式，一律"整理中"
+        # 瞬时状态放标题栏，不再占用正文高度；整理状态不区分模式。
         hint = ""
         dots = "…"  # 固定提示宽度，避免无正文时胶囊跟随省略号反复伸缩
         if state["mode"] == "awake":
             if state.get("warming"):
                 elapsed = now - state.get("warming_start", now)
                 remain = max(0, 10 - int(elapsed))
-                hint = f"正在启动推理引擎并加载模型…剩余 {remain} 秒"
+                hint = f"正在启动…剩余 {remain} 秒"
             elif state.get("speaking"):
                 hint = f"正在说话{dots}"
             elif state["status"] == "transcribing":
@@ -422,13 +422,15 @@ def run_overlay(state):
         room_w, room_h = expansion_bounds(work_area, anchor, D, _direction[0])
         available_w = max(D, min(expanded_w, room_w))
         available_h = max(D, min(max_panel_h, room_h))
-        glass.prepare(clean, raw, hint, warn_text, low_conf,
+        glass.prepare(clean, raw, "", warn_text, low_conf,
                       max(scaled(24), available_h - header_h - scaled(16)), available_w - scaled(24))
-        expanded = glass.present and not _folded[0]
+        expanded = (glass.present or bool(hint)) and not _folded[0]
         text_xy = (scaled(12), header_h + scaled(4))
         if expanded:
-            width = min(available_w, max(scaled(MIN_WIDTH), glass.w + scaled(24)))
-            height = min(available_h, max(D, header_h + glass.h + scaled(16)))
+            body_w = glass.w + scaled(24) if glass.present else 0
+            body_h = header_h + glass.h + scaled(16) if glass.present else D
+            width = min(available_w, max(scaled(MIN_WIDTH), body_w))
+            height = min(available_h, max(D, body_h))
             dx, dy = expansion_offset(work_area, anchor, D, (width, height), _direction[0])
             target = (width, height, scaled(16), dx, dy, scaled(8), scaled(3), scaled(30))
         else:
@@ -451,12 +453,13 @@ def run_overlay(state):
             hover = hit_button(button_rects(img.width, ui_scale), pt.x - wx, pt.y - wy)
             rects = draw_toolbar(img, ui_scale, hover, bool(clean or raw), glass.editing,
                                  bool(state.get("panel_sending")), (progress - 0.65) / 0.35,
-                                 notice="已复制" if now < _copied_until[0] else "")
+                                 notice="已复制" if now < _copied_until[0] else hint)
             if expanded and not morph.moving:
                 _buttons[0] = rects
         _last_img[0] = img
         blit(hwnd, img, wx, wy)
-        glass.place(wx + text_xy[0], wy + text_xy[1], expanded and not morph.moving)
+        glass.place(wx + text_xy[0], wy + text_xy[1],
+                    glass.present and expanded and not morph.moving)
         # Windows 定时器常为 15.6ms 粒度；请求 16ms 容易进位到约 31ms。
         interval = 15 if morph.moving else 80
         if interval != _timer_ms[0]:
@@ -537,7 +540,7 @@ def run_overlay(state):
                 glass._start_edit()
             elif action == "polish" and not pbuf.cleaning_mode:
                 # 与语音"文本整理"同一入口；要调本地模型好几秒，放后台线程别卡住界面，
-                # 期间面板底部照常显示"正在整理…"
+                # 期间标题栏照常显示"正在整理…"
                 threading.Thread(target=pbuf.trigger_polish_now, daemon=True).start()
             elif action == "send" and state.get("send_panel"):
                 if pbuf.text_parts[0] or pbuf.text_parts[1]:

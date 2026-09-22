@@ -183,6 +183,10 @@ class CapsuleText(panel.GlassWindow):
         self.u.ReleaseDC(None, hdc)
         self.content_w = max(1, min(self.limit_width, max_w - self.pad * 2, measured + 12))
         self.u.MoveWindow(self.edit, self.pad, self.pad, self.content_w, max_h, False)
+        # RichEdit 在隐藏状态下会延迟更新排版矩形；首次正文紧跟较窄的
+        # 状态提示出现时，立即读行数会拿到旧宽度的结果，把窗口错误撑高。
+        format_rect = panel._RECT(1, 0, max(1, self.content_w - 1), max_h)
+        self.u.SendMessageW(self.edit, panel._EM_SETRECT, 0, ctypes.byref(format_rect))
         line_h = self._line_h()
         line_count = self.u.SendMessageW(self.edit, panel._EM_GETLINECOUNT, 0, 0)
         self._status_text, self._status_color = hint, self.hint_color
