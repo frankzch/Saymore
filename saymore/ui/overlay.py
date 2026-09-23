@@ -386,7 +386,9 @@ def run_overlay(state):
         # 瞬时状态放标题栏，不再占用正文高度；整理状态不区分模式。
         hint = ""
         dots = "…"  # 固定提示宽度，避免无正文时胶囊跟随省略号反复伸缩
-        if state["mode"] == "awake":
+        if state.get("panel_sending"):
+            hint = "正在发送…" if state.get("send_phase") == "sending" else "整理中 → 发送"
+        elif state["mode"] == "awake":
             if state.get("warming"):
                 elapsed = now - state.get("warming_start", now)
                 remain = max(0, 10 - int(elapsed))
@@ -453,7 +455,7 @@ def run_overlay(state):
             hover = hit_button(button_rects(img.width, ui_scale), pt.x - wx, pt.y - wy)
             rects = draw_toolbar(img, ui_scale, hover, bool(clean or raw), glass.editing,
                                  bool(state.get("panel_sending")), (progress - 0.65) / 0.35,
-                                 notice="已复制" if now < _copied_until[0] else hint)
+                                 notice="已复制" if now < _copied_until[0] and not state.get("panel_sending") else hint)
             if expanded and not morph.moving:
                 _buttons[0] = rects
         _last_img[0] = img
@@ -521,6 +523,8 @@ def run_overlay(state):
             print(f"[warn] 记住小圆窗位置失败：{e}")
 
     def perform_action(action):
+        if state.get("panel_sending"):
+            return
         pbuf = state.get("panel")
         if glass.editing:
             if action == "edit":  # 编辑中其余键已变灰不响应；再点编辑键＝保存并退出
@@ -686,6 +690,7 @@ def run_overlay(state):
         on_edit_start=on_panel_edit_start,
         on_edit_end=on_panel_edit_end,
     )
+    glass.can_edit = lambda: not state.get("panel_sending")
     glass.u.SetWindowLongPtrW(glass.hwnd, -8, hwnd)  # 原生文字区归属外轮廓，置顶时不会互相覆盖
     if state["mode"] == "sleep":       # 启动即处于休眠：直接不显示，避免先露一帧再隐藏的闪烁
         _visible[0] = False

@@ -134,6 +134,8 @@ class CapsuleText(panel.GlassWindow):
         self.dwm.DwmSetWindowAttribute(self.hwnd, 33, ctypes.byref(pref), 4)
 
     def _start_edit(self):
+        if hasattr(self, "can_edit") and not self.can_edit():
+            return
         self.editing = True
         self._hint_h = 0
         self._prev_fg = self.u.GetForegroundWindow()

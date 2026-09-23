@@ -77,6 +77,9 @@ def _wordlist_path(key, cfg, cfg_dir):
         name = opts.get("file", "")
     if not name:
         return None
+    if key == "hotwords_file":
+        from saymore.paths import _resolve
+        return _resolve(name)
     p = Path(name)
     return p if p.is_absolute() else cfg_dir / p
 

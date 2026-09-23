@@ -103,6 +103,21 @@ class CapsuleWindowTest(unittest.TestCase):
                 click()  # 再点猫展开
                 time.sleep(0.4)
                 self.assertGreater(rect().right - rect().left, diameter)
+                state["panel_sending"] = True
+                state["send_phase"] = "polishing"
+                time.sleep(0.2)
+                self.assertIn("整理中 → 发送", notices)
+                click("copy")
+                click("edit")
+                click("send")
+                u.SendMessageW(view.edit, 0x0203, 0, 0)  # 双击正文也不能进入编辑
+                self.assertEqual(copied, ["用于测试的缓存文字。"])
+                self.assertFalse(view.editing)
+                self.assertEqual(sent, [])
+                state["send_phase"] = "sending"
+                time.sleep(0.2)
+                self.assertIn("正在发送…", notices)
+                state["panel_sending"] = False
                 click("edit")
                 self.assertTrue(view.editing)
                 u.SendMessageW(view.edit, 0x000C, 0, ctypes.c_wchar_p("修改后的文字"))

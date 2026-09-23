@@ -2,11 +2,35 @@ import json
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 from saymore.hotwords.learn import HotWords, rank_terms
+from saymore import paths
+from saymore.ui.settings import _wordlist_path
 
 
 class HotwordRankingTest(unittest.TestCase):
+    def test_packaged_data_moves_out_of_install_dir_and_settings_uses_it(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            install = root / "install"
+            install.mkdir()
+            (install / "hotwords.json").write_text('{"done":{},"terms":{}}', encoding="utf-8")
+            (install / "hotwords.txt").write_text("旧词\n", encoding="utf-8")
+            history = install / "typed_history"
+            history.mkdir()
+            (history / "2026-09-23.jsonl").write_text("旧记录\n", encoding="utf-8")
+            with patch.object(paths.sys, "frozen", True, create=True), \
+                 patch.object(paths, "PROJECT_ROOT", install), \
+                 patch.dict(paths.os.environ, {"APPDATA": str(root / "roaming")}):
+                saved = root / "roaming" / "Saymore"
+                for name in ("hotwords.json", "hotwords.txt", "typed_history"):
+                    self.assertEqual(paths._resolve(name), saved / name)
+                    self.assertTrue((saved / name).exists())
+                    self.assertFalse((install / name).exists())
+                self.assertEqual(_wordlist_path("hotwords_file", {}, install), saved / "hotwords.txt")
+                self.assertEqual(paths._resolve("hotwords.json"), saved / "hotwords.json")
+
     def test_two_rankings_are_persisted_and_recency_has_two_thirds_weight(self):
         terms = {
             "最新一次": {"count": 1, "last_seen": "2026-08-23 10:00:00"},

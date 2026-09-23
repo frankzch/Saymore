@@ -7,6 +7,7 @@
 ;   _internal\            ← Python 运行时(不动)
 ;   config.json           ← 首启由程序自己写(用 DEFAULT_CONFIG),之后用户改就保留、卸载不删
 ;   terms.txt             ← 术语表(用户可编辑,卸载不删)
+;   历史切词/口述记录    ← 保存在 %APPDATA%\Saymore，不随卸载删除
 ;   silero_vad.onnx       ← VAD
 ;   kws-model\            ← 唤醒模型
 ;   polish_lora\          ← 整理 LoRA
@@ -95,7 +96,8 @@ Root: HKCU; Subkey: "Software\Microsoft\Windows\CurrentVersion\Explorer\StartupA
 Filename: "{app}\{#AppExeName}"; Description: "立即启动 {#AppName}"; Flags: nowait postinstall skipifsilent
 
 [UninstallDelete]
-; 方案 A: 卸载删下载的模型 + 日志 + 运行时生成的 keywords 缓存；保留 config.json / terms.txt。
+; 卸载删下载的模型 + 日志 + 运行时生成的 keywords 缓存；保留 config.json / terms.txt。
+; hotwords.json / hotwords.txt / typed_history 在 %APPDATA%\Saymore，不受本节影响。
 ; 之后 {app}\ 若空,Inno 会自动清掉(需 [Setup] 里没设 UsePreviousAppDir=no 之类;默认行为即可)。
 Type: filesandordirs; Name: "{app}\models"
 Type: filesandordirs; Name: "{app}\logs"

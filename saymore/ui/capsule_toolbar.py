@@ -67,9 +67,11 @@ def _font(size):
 
 def is_active(action, enabled=True, editing=False, sending=False):
     """编辑中只留编辑键（再点一下＝保存退出）；发送中或无正文时都不响应。"""
+    if sending:
+        return False
     if editing:
         return action == "edit"
-    return enabled and not sending
+    return enabled
 
 
 def draw_toolbar(canvas, scale, hover=None, enabled=True, editing=False, sending=False, opacity=1,
@@ -91,13 +93,14 @@ def draw_toolbar(canvas, scale, hover=None, enabled=True, editing=False, sending
                   fill=(96, 118, 104, 255), anchor="mm")
     for action, (l, t, r, b) in rects.items():
         active = is_active(action, enabled, editing, sending)
-        selected = editing and action == "edit"
+        selected = editing and not sending and action == "edit"
         if selected:  # 编辑键实心绿底白图标，一眼看出正处于编辑模式
             draw.rounded_rectangle((l, t, r, b), radius=round(7 * scale), fill=(52, 168, 83, 255))
         elif action == hover and active:
             draw.rounded_rectangle((l, t, r, b), radius=round(7 * scale), fill=(200, 234, 212, 255))
         # 有意为之：无正文只禁止操作，不改变标题栏配色；编辑中其余键才变灰。
-        color = ((255, 255, 255, 255) if selected else (170, 184, 176, 255) if editing else
+        color = ((255, 255, 255, 255) if selected and not sending else
+                 (170, 184, 176, 255) if editing or sending else
                  (52, 168, 83, 255) if action == "send" else (51, 65, 58, 255))
         icon_size = round(17 * scale)
         layer.alpha_composite(_icon(action, icon_size, color),

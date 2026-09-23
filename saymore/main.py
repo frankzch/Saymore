@@ -655,7 +655,7 @@ def main():
         state["cmd_cue_i"] = i + 1
         threading.Thread(target=tts.play_cue, args=(_CMD_ACK_CUES[i % len(_CMD_ACK_CUES)],), daemon=True).start()
 
-    def send_buffer():
+    def _send_buffer_impl():
         """语音命令与标题栏按钮共用发送流程，统一检查焦点、整理和记录。"""
         state["nod_until"] = time.time() + 0.9  # 执行命令：猫点头致意
         # 前置探测：前台窗口若找不到输入框（焦点在任务栏/桌面等），提示用户重定位，
@@ -671,6 +671,7 @@ def main():
         sent = True
         if state.get("panel") is not None:
             sent = state["panel"].flush_all()  # 先把面板里攒的话整理回填，再回车
+        state["send_phase"] = "sending"
         if not sent:  # 整块置信度不足：扣下不发也不按回车，缓存原样留着，等下一轮/用户重说覆盖
             if not reminder.nagging:
                 threading.Thread(target=tts.play_cue, args=("这句没整理好，麻烦再说一遍。",), daemon=True).start()
@@ -689,6 +690,16 @@ def main():
         print(f"[done] 发送（{'回车' if auto_enter else '不回车'}）")
         ack_cue()
         return True
+
+    def send_buffer():
+        """语音和按钮发送时都锁定缓存窗，结束或失败后恢复操作。"""
+        state["panel_sending"] = True
+        state["send_phase"] = "polishing"
+        try:
+            return _send_buffer_impl()
+        finally:
+            state["panel_sending"] = False
+            state["send_phase"] = None
 
     def run_global_command(cmd):
         """整句命令在听写/提醒两种模式下都生效：命中即执行并返回 True，否则 False。"""
@@ -883,6 +894,7 @@ def main():
     def request_panel_send():
         if not state.get("panel_sending"):
             state["panel_sending"] = True
+            state["send_phase"] = "polishing"
             state["last_activity"] = time.time()
             seg_queue.put(panel_send)  # 与语音按同一队列串行执行，不阻塞界面动画。
 
@@ -900,6 +912,7 @@ def main():
                     state["warn"] = ("发送失败，请检查输入框后重试。", time.time() + 15)
                 finally:
                     state["panel_sending"] = False
+                    state["send_phase"] = None
                     state["last_activity"] = time.time()
                 continue
             if seg is None:

@@ -6,10 +6,14 @@ from PIL import Image
 from saymore.ui import panel
 from saymore.ui.capsule import (CapsuleText, Morph, default_position, draw_capsule,
                                 expansion_direction, expansion_bounds, expansion_offset)
-from saymore.ui.capsule_toolbar import HEADER_HEIGHT, button_rects, draw_toolbar, hit_button
+from saymore.ui.capsule_toolbar import HEADER_HEIGHT, button_rects, draw_toolbar, hit_button, is_active
 
 
 class MorphTest(unittest.TestCase):
+    def test_sending_disables_every_toolbar_action(self):
+        for action in ("copy", "edit", "polish", "send"):
+            self.assertFalse(is_active(action, enabled=True, editing=False, sending=True))
+
     def test_open_retarget_and_close_without_position_jump(self):
         animation = Morph(48)
         animation.move((320, 48, 24), 0)
