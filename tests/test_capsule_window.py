@@ -106,7 +106,7 @@ class CapsuleWindowTest(unittest.TestCase):
                 state["panel_sending"] = True
                 state["send_phase"] = "polishing"
                 time.sleep(0.2)
-                self.assertIn("整理中 → 发送", notices)
+                self.assertIn("正在整理…", notices)
                 click("copy")
                 click("edit")
                 click("send")

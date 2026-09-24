@@ -83,7 +83,7 @@ def draw_toolbar(canvas, scale, hover=None, enabled=True, editing=False, sending
     labels = ((notice,) if notice else
               (LABELS[hover],) if hover in LABELS and not editing and is_active(hover, enabled, editing, sending) else
               ("编辑中 · Enter 保存 · Esc 放弃", "Enter 保存 · Esc 放弃", "Enter 保存") if editing else
-              ("发送中…",) if sending else ())
+              ("正在发送…",) if sending else ())
     label_x, header = round(42 * scale), round(HEADER_HEIGHT * scale)
     room = rects["copy"][0] - label_x - round(8 * scale)
     font = _font(max(10, round(11 * scale)))
