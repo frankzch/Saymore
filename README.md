@@ -9,15 +9,15 @@ Saymore 是一款面向 Windows 的纯本地中文语音输入与口述整理软
 
 **轻度整理**(保留原始说话风格,只去口水词/重复词/纠错/加标点):
 
-![轻度整理](docs/assets/SayMore_LightEdit.gif)
+![轻度整理](1.gif)
 
 **深度整理**(口语 → 书面语):
 
-![深度整理](docs/assets/SayMore_DeepEdit.gif)
+![深度整理](2.gif)
 
 **邮件整理**(口语 → 邮件正文):
 
-![邮件整理](docs/assets/SayMore_Mail.gif)
+![邮件整理](3.gif)
 
 
 ### 核心特点(一览)
