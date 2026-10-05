@@ -86,6 +86,15 @@ class _Api:
         except Exception as e:  # noqa: BLE001
             return {"ok": False, "msg": f"删除失败：{e}"}
 
+    def copy_text(self, text):
+        """历史记录复制：WebView2 里 navigator.clipboard 常被拒、execCommand 失败又不抛错，走 Python 写剪贴板才可靠。"""
+        import pyperclip
+        try:
+            pyperclip.copy(text)
+            return {"ok": True, "msg": "已复制"}
+        except Exception as e:  # noqa: BLE001
+            return {"ok": False, "msg": f"复制失败：{e}"}
+
     def restart(self):
         """设置改动需重启才生效：写触发文件，交语音进程接住——拉新进程接班、自己退出。"""
         try:
@@ -913,18 +922,8 @@ const _ICO_TRASH = '<svg viewBox="0 0 24 24"><path d="M3 6h18"/>'
   + '<path d="M8 6V4a1 1 0 0 1 1-1h6a1 1 0 0 1 1 1v2"/>'
   + '<path d="M6 6v13a2 2 0 0 0 2 2h8a2 2 0 0 0 2-2V6"/></svg>';
 function copyText(s) {
-  const done = () => toast({ok: true, msg: '已复制'});
-  if (navigator.clipboard && navigator.clipboard.writeText) {
-    navigator.clipboard.writeText(s).then(done).catch(() => fallbackCopy(s, done));
-  } else { fallbackCopy(s, done); }
-}
-function fallbackCopy(s, done) {
-  const ta = document.createElement('textarea'); ta.value = s;
-  ta.style.position = 'fixed'; ta.style.opacity = '0'; document.body.appendChild(ta);
-  ta.select();
-  try { document.execCommand('copy'); done(); }
-  catch (_) { toast({ok: false, msg: '复制失败'}); }
-  document.body.removeChild(ta);
+  window.pywebview.api.copy_text(s).then(toast)
+    .catch(() => toast({ok: false, msg: '复制失败：桥接未就绪'}));
 }
 function deleteEntry(kind, e, card) {
   window.pywebview.api.delete_history(kind, e.t, e.text).then(r => {
