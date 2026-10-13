@@ -50,6 +50,8 @@ llama-cpp/
 
 # 内部规划 / 代码地图 / AI 助手规则：仅本地工作用，不公开
 ARCHITECTURE.md
+# 推广视频制作稿仅放私有工作台；旧样片关闭预览后清理
+videos/
 CLAUDE.md
 PLAN-panel-and-features.md
 
