@@ -101,23 +101,27 @@ def make_llm_extractor(chat_fn, topn=TOP_N):
     return extract
 
 
-def assemble_context(groups, max_total):
+def assemble_context(groups, max_total, emit_order=None):
     """按优先级把多来源词表拼成偏置 context(一行一词)，总量不超过 max_total。
     groups: [(cap, words), ...] 按优先级从高到低；cap 是本组词数上限(None 不限)。
-    先来的组先占位，跨组去重，总数到 max_total 就停——高优先来源挤掉低优先的。"""
-    out, seen = [], set()
+    先来的组先占位，跨组去重，总数到 max_total 就停——高优先来源挤掉低优先的。
+    emit_order: 输出时各组的排列(组下标)，缺省同优先级。名额分配仍按优先级；
+    把常变的组排到最后，llama-server 前缀缓存就能复用前面不变的部分。"""
+    picked, seen, total = [], set(), 0
     for cap, words in groups:
-        taken = 0
+        got = []
         for w in words:
-            if len(out) >= max_total or (cap is not None and taken >= cap):
+            if total >= max_total or (cap is not None and len(got) >= cap):
                 break
             w = w.strip()
             if not w or w in seen:
                 continue
             seen.add(w)
-            out.append(w)
-            taken += 1
-    return "\n".join(out)
+            got.append(w)
+            total += 1
+        picked.append(got)
+    order = emit_order if emit_order is not None else range(len(groups))
+    return "\n".join(w for i in order for w in picked[i])
 
 
 def _diff_preview(old, new, maxlines=3):
@@ -304,6 +308,9 @@ if __name__ == "__main__":
     assert asm.split("\n") == ["发送", "撤销", "Qwen3-ASR", "GGUF", "量化", "推理", "语音识别"], asm
     assert assemble_context([(None, ["a", "b", "c"])], 2) == "a\nb"  # 总量硬截断
     assert assemble_context([], 5) == ""
+    # emit_order：名额仍按优先级分(屏幕 cap=1 先占)，输出把屏幕组挪到最后
+    assert assemble_context([(None, ["a"]), (1, ["s1", "s2"]), (None, ["h1", "h2"])], 3,
+                            emit_order=[0, 2, 1]) == "a\nh1\ns1"
     print("优先级组装 OK:", asm.replace("\n", " "))
 
     # 实抓一次前台窗口(手动跑时看抓到多少字；提词需连真模型，这里只验证抓取)

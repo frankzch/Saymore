@@ -16,7 +16,7 @@ import time
 # 切词走 extract 人格：提示词/输出格式必须与它训练时一致（训推同源），否则 LoRA 输出对不上解析
 from saymore.hotwords.screen import EXTRACT_SYSTEM, parse_terms
 
-TOP_N = 60          # 写进热词文件的词数上限；context 过长会拖慢推理
+TOP_N = 120         # 写进热词文件的词数上限；实际喂多少由 bias_max_terms 剩余名额决定
 BATCH_CHARS = 1500  # 每轮送本地模型的历史总字数上限（不按行数，用户可能一次口述整篇文章）
 TIMEOUT_SEC = 8     # 单轮硬超时：整个 distill 走完（含 llama-server 调用）必须 ≤10s，超时本轮丢弃 done 不推进
 MAX_TOKENS = 256    # 一批历史能挑出几十个词，比屏幕提词的 32 大得多

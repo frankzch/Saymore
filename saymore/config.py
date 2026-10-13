@@ -58,9 +58,9 @@ DEFAULT_CONFIG = {
     "overlay_offset": None,      # 小圆窗距主屏工作区右下角 [右,下]；拖动后记住，换分辨率仍对齐
     # 无云端 LLM 配置：转写/四种整理/屏幕提词/历史热词全部走本地 llama-server + 多 LoRA
     "qwen_context_file": "terms.txt",
-    "bias_max_terms": 80,        # 长段偏置词表总上限（不含命令词）；优先级：命令词>屏幕热词>静态术语>历史热词
-    "screen_bias_max_terms": 10, # 屏幕热词份额硬上限
-    "static_bias_max_terms": 30, # 静态术语份额硬上限；历史热词无 cap，吃剩余
+    "bias_max_terms": 150,       # 偏置词表总上限（含命令词）；优先级：命令词>屏幕热词>静态术语>历史热词
+    "screen_bias_max_terms": 20, # 屏幕热词份额硬上限
+    "static_bias_max_terms": 15, # 静态术语份额硬上限；历史热词无 cap，吃剩余
     "focus_window_title": "",    # 留空=通用：一律在当前前台窗口自动找输入框
     "focus_input_name": "",      # 仅当前台命中 focus_window_title 时才用 UIA 精确定位到此名字的输入控件
     "send_words": ["发送", "提交"],       # 整句只说这些词之一时，不打字而是切回窗口回填/回车提交

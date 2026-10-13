@@ -462,8 +462,9 @@ def main():
         if "extract" in _loras else None)
     # 屏幕上下文热词：后台抓前台窗口文字，交本地 llama-server 提术语，转写时拼进偏置。
     screen_extractor = make_llm_extractor(
-        lambda system, text: llama_asr.extract(text, system, role="extract"),
-        topn=cfg.get("screen_bias_max_terms", 10))
+        # max_tokens 64：32 只够吐 6~11 个词，份额上限形同虚设；提词只在停顿 >7s 后跑，多解码约 1s 可接受
+        lambda system, text: llama_asr.extract(text, system, role="extract", max_tokens=64),
+        topn=cfg.get("screen_bias_max_terms", 20))
     screen_ctx = ScreenContext(screen_extractor)
 
     # 上下文偏置：命令词(send_words 等) + 屏幕热词 + 静态术语表(qwen_context_file)
@@ -473,6 +474,8 @@ def main():
     #   静态术语：static_bias_max_terms 硬封顶
     #   历史热词：无 cap 排最末——静态没填满、跨组去重省下的名额自动下放给历史，把总量吃满 bias_total
     # 总量封顶防稀释注意力+拖慢。屏幕热词实时变故每次现拼；两个文件按 mtime 缓存词表，改了自动重载。
+    # 输出顺序 命令→静态→历史→屏幕：热词前缀不变时 llama-server 复用 KV 缓存，词数几乎不影响速度；
+    # 屏幕词最常变，排最后，变了只重算它那一小段。
     command_words = [
         w for k in ("send_words", "confirm_words", "undo_words",
                      "clear_words", "polish_words", "sleep_words", "quit_words",
@@ -484,9 +487,9 @@ def main():
         static_path = _resolve(cf)
     history_path = hotwords.txt_file
     file_cache = {"key": None, "static": [], "history": []}
-    bias_total = cfg.get("bias_max_terms", 80)
-    screen_cap = cfg.get("screen_bias_max_terms", 10)
-    static_cap = cfg.get("static_bias_max_terms", 30)
+    bias_total = cfg.get("bias_max_terms", 150)
+    screen_cap = cfg.get("screen_bias_max_terms", 20)
+    static_cap = cfg.get("static_bias_max_terms", 15)
 
     def _lines(p):
         return [ln for ln in p.read_text(encoding="utf-8").splitlines() if ln.strip()]
@@ -504,7 +507,7 @@ def main():
             (static_cap, file_cache["static"]),                       # 静态术语：剩余的一半
             (None, file_cache["history"]),                            # 历史：无 cap，吃剩余到 bias_total
         ]
-        return assemble_context(groups, bias_total)
+        return assemble_context(groups, bias_total, emit_order=[0, 2, 3, 1])
 
     language = cfg.get("language") or None
     if isinstance(language, str) and language.lower() in ("zh", "zh-cn", "chinese"):
