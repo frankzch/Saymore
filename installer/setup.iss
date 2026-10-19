@@ -94,6 +94,8 @@ Root: HKCU; Subkey: "Software\Microsoft\Windows\CurrentVersion\Explorer\StartupA
 [Run]
 ; 装完可选立即启动
 Filename: "{app}\{#AppExeName}"; Description: "立即启动 {#AppName}"; Flags: nowait postinstall skipifsilent
+; 程序内自动更新走 /SILENT 安装（saymore/updater.py），装完自动重新拉起
+Filename: "{app}\{#AppExeName}"; Flags: nowait; Check: WizardSilent
 
 [UninstallDelete]
 ; 卸载删下载的模型 + 日志 + 运行时生成的 keywords 缓存；保留 config.json / terms.txt。

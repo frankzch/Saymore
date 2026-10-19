@@ -19,6 +19,7 @@ _NIF_MESSAGE, _NIF_ICON, _NIF_TIP, _NIF_INFO = 0x1, 0x2, 0x4, 0x10
 _NIF_SHOWTIP = 0x80
 _NIIF_INFO = 0x1
 _WM_LBUTTONUP, _WM_LBUTTONDBLCLK, _WM_RBUTTONUP = 0x0202, 0x0203, 0x0205
+_NIN_BALLOONUSERCLICK = 0x0405  # 用户点了气泡通知（如"发现新版本"）：同左键，拉起主界面
 _IMAGE_ICON, _LR_LOADFROMFILE, _LR_DEFAULTSIZE = 1, 0x10, 0x40
 
 
@@ -92,7 +93,7 @@ class TrayIcon:
         _focus_existing() 的查重来不及生效，三次触发会叠开三个窗口。这里做去抖：
         800ms 内只放行一次，从消息源头掐断，不依赖子进程窗口何时真正建好。"""
         event = lparam & 0xFFFF
-        if event in (_WM_LBUTTONUP, _WM_LBUTTONDBLCLK):
+        if event in (_WM_LBUTTONUP, _WM_LBUTTONDBLCLK, _NIN_BALLOONUSERCLICK):
             now = time.monotonic()
             if now - self._last_activate < 0.8:
                 return

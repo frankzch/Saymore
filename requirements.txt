@@ -12,5 +12,5 @@ python-docx>=1.0.0
 openpyxl>=3.1.0
 python-pptx>=1.0.0
 rapidocr-onnxruntime>=1.4.0
-edge-tts>=7.0.0
+edge-tts>=7.3.1
 pywebview>=5.0        # 设置窗口：原生 WebView2 窗口渲染 HTML（Win11 自带 WebView2 运行时）

@@ -482,12 +482,16 @@ def run_overlay(state):
             print(f"[warn] 打不开主界面：{e}")
 
     def show_menu():
-        """小圆环右键菜单：只两项——主界面 / 退出程序（设置/历史/导入全收进主界面 tab）。
+        """小圆环右键菜单：主界面 / 退出程序（设置/历史/导入全收进主界面 tab）；有新版本时多一项更新。
         Apple 风自绘弹窗（ui_style），后台线程跑 tkinter 不阻塞消息循环。"""
         import saymore.ui.style as ui_style
-        items = [("主界面", open_main),
-                 None,
-                 ("退出程序", lambda: state.__setitem__("quit", True), "danger")]
+        items = [("主界面", open_main)]
+        upd = state.get("update")
+        if upd and state.get("update_install"):
+            # 同时拉起主界面：下载进度显示在它的顶部横条里
+            items.append((f"更新到 {upd['version']}",
+                          lambda: (state["update_install"](), open_main())))
+        items += [None, ("退出程序", lambda: state.__setitem__("quit", True), "danger")]
 
         def run_menu():
             # 菜单开着时先关掉圆环的每帧置顶重申，否则 80ms 后圆环会把菜单盖回去

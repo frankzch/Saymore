@@ -18,6 +18,7 @@ import saymore.ui.history as history_view
 import saymore.audio.mic_probe as mic_probe
 import saymore.win.autostart as autostart
 from saymore import runtime_check, downloader
+import saymore.ui.update_banner as update_banner
 def _build_html(cfg, cfg_dir, history_dir, reminders_log, tab):
     payload = {
         "settings": settings_window.settings_data(cfg, cfg_dir),
@@ -30,7 +31,7 @@ def _build_html(cfg, cfg_dir, history_dir, reminders_log, tab):
         "tab": tab if tab in ("settings", "hotwords", "history", "import", "runtime") else "settings",
     }
     data = json.dumps(payload, ensure_ascii=False).replace("</", "<\\/")
-    return _HTML.replace("__DATA__", data)
+    return _HTML.replace("__DATA__", data).replace("</body>", update_banner.SNIPPET + "</body>")
 
 
 class _Api:
@@ -179,6 +180,27 @@ class _Api:
             return {"ok": True}
         except Exception as e:  # noqa: BLE001
             return {"ok": False, "msg": str(e)}
+
+    # 自动更新同样跑在语音进程（saymore/updater.py），这里只读状态文件、写控制文件
+    def update_status(self):
+        try:
+            return json.loads((Path(self._cfg).parent / ".update_status.json").read_text(encoding="utf-8"))
+        except (OSError, ValueError):  # 文件不在（开发版/还没查过）或偶发半截
+            return None
+
+    def _update_control(self, action):
+        try:
+            (Path(self._cfg).parent / ".update_control.json").write_text(
+                json.dumps({"action": action}), encoding="utf-8")
+            return {"ok": True}
+        except OSError as e:
+            return {"ok": False, "msg": str(e)}
+
+    def update_install(self):
+        return self._update_control("install")
+
+    def update_quit(self):
+        return self._update_control("quit")
 
     def download_reset(self, key):
         """占位：状态由语音进程管理，主窗口不需要主动 reset。"""

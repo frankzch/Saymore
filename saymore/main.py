@@ -220,6 +220,15 @@ def main():
         overlay_thread = threading.Thread(target=run_overlay, args=(state,), daemon=True)
         overlay_thread.start()
 
+    # 自动更新：后台定时查 GitHub Release，提示走托盘气泡/菜单 + 主界面横条（见 updater.py）。
+    # 放在两条分支（缺模型下载中 / 正常）分叉前，两边都能收到更新。
+    def _show_main_for_update():
+        import saymore.ui.main_window as main_window
+        main_window.show(CONFIG_PATH, state["history_file"], state["reminders_log"],
+                         state["import_trigger"], state["restart_trigger"])
+    from saymore import updater
+    updater.start(state, _close_main_window, _show_main_for_update)
+
     if first_run:  # 装完第一次打开：自动拉起主界面，别让用户对着空桌面找不到入口
         print("[info] 首次启动，自动打开主界面。")
         import saymore.ui.main_window as main_window
