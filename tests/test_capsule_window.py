@@ -138,6 +138,10 @@ class CapsuleWindowTest(unittest.TestCase):
                 self.assertIn("正在说话…", notices)
                 state["speaking"] = False
                 time.sleep(0.4)
+                state["input_suppressed"] = True
+                time.sleep(0.4)
+                self.assertIn("正在播报，请稍候…", notices)
+                state["input_suppressed"] = False
                 buffer.text_parts = ("拖到左上角以后向右下展开。" * 15, "", False)
                 area = wintypes.RECT()
                 u.SystemParametersInfoW(0x0030, 0, ctypes.byref(area), 0)

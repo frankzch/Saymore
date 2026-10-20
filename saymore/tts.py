@@ -14,9 +14,18 @@ import time
 import comtypes.client
 
 from saymore.win import comtypes_cache
+from saymore.paths import CONFIG_PATH
 
 _lock = threading.Lock()
 playing = False
+_ECHO_TAIL_SECONDS = 0.4
+_capture_state = (0, 0.0)
+_config_lock = threading.Lock()
+_config_version = None
+_enabled = True
+_cancelled = threading.Event()
+_cancel_generation = 0
+_watcher_started = False
 
 # 音色：可在 config.json 改 tts_voice。常用 zh-CN-XiaoxiaoNeural(女)/zh-CN-YunxiNeural(男)。
 try:
@@ -26,45 +35,125 @@ except Exception:
     _VOICE = "zh-CN-XiaoxiaoNeural"
 
 
-def _speak_sapi(text):
+def _refresh_config():
+    global _config_version, _enabled, _cancelled, _cancel_generation
+    with _config_lock:
+        try:
+            stat = CONFIG_PATH.stat()
+            version = (stat.st_mtime_ns, stat.st_size)
+            if version == _config_version:
+                return
+            cfg = json.loads(CONFIG_PATH.read_text(encoding="utf-8"))
+            if not isinstance(cfg, dict):
+                return
+        except (OSError, ValueError):
+            return  # 设置写入期间可能读到半截，保留状态并在下轮重试
+        enabled = bool(cfg.get("tts_enabled", True))
+        generation = cfg.get("tts_cancel_generation", 0)
+        if not enabled or generation != _cancel_generation:
+            _cancelled.set()
+        if enabled and _cancelled.is_set():
+            _cancelled = threading.Event()  # 重新开启只接新播报，旧请求的取消标记不复用
+        _enabled = enabled
+        _cancel_generation = generation
+        _config_version = version
+
+
+def _watch_config():
+    while True:
+        _refresh_config()
+        time.sleep(0.05)
+
+
+def _request_token():
+    global _watcher_started
+    _refresh_config()
+    with _config_lock:
+        if not _watcher_started:
+            threading.Thread(target=_watch_config, daemon=True).start()
+            _watcher_started = True
+        return _cancelled if _enabled else None
+
+
+def capture_state():
+    """返回播放代次和收音恢复时刻；播放中为 inf，结束后保护扬声器尾音。"""
+    return _capture_state
+
+
+def input_suppressed():
+    return time.monotonic() < _capture_state[1]
+
+
+def _start_playback():
+    global playing, _capture_state
+    _capture_state = (_capture_state[0] + 1, float("inf"))
+    playing = True
+
+
+def _finish_playback():
+    global playing, _capture_state
+    _capture_state = (_capture_state[0], time.monotonic() + _ECHO_TAIL_SECONDS)
+    playing = False
+
+
+def _speak_sapi(text, cancelled):
     """系统自带、离线兜底。"""
-    global playing
     try:
         comtypes.CoInitialize()
     except Exception:
         pass  # 已初始化过的线程会抛 S_FALSE，忽略
     comtypes_cache.ensure()  # CreateObject 会现生成 SAPI 包装写进缓存目录,用前确保它在
     voice = comtypes.client.CreateObject("SAPI.SpVoice")
-    playing = True
+    if cancelled.is_set():
+        return
+    _start_playback()
+    completed = False
     try:
-        voice.Speak(text)
+        voice.Speak(text, 1)  # SVSFlagsAsync，让本线程能检查取消并清空播放队列
+        while not cancelled.is_set():
+            if voice.WaitUntilDone(20):
+                completed = True
+                return
     finally:
-        playing = False
+        try:
+            if not completed:
+                voice.Speak("", 3)  # SVSFlagsAsync | SVSFPurgeBeforeSpeak
+        finally:
+            _finish_playback()
 
 
-def _play_mp3(path):
+def _play_mp3(path, cancelled):
     """用 Windows 自带 MCI(winmm)同步播 mp3，阻塞到放完。用轮询播放状态判断放完，
     而不是按 mp3 的 length 元数据算 sleep 时长——部分文件（尤其 ffmpeg 转码过的）
     length 读数不准，按它 sleep 会提前切断播放。"""
-    global playing
+    if cancelled.is_set():
+        return
     alias = "edgetts_play"
     mci = ctypes.windll.winmm.mciSendStringW
     buf = ctypes.create_unicode_buffer(64)
     mci(f'open "{path}" type mpegvideo alias {alias}', None, 0, None)
+    started = False
     try:
-        playing = True
+        if cancelled.is_set():
+            return
+        _start_playback()
+        started = True
         mci(f"play {alias}", None, 0, None)
-        while True:
+        while not cancelled.is_set():
             mci(f"status {alias} mode", buf, 64, None)
             if buf.value.strip().lower() != "playing":
                 break
-            time.sleep(0.02)
+            cancelled.wait(0.02)
     finally:
-        playing = False
-        mci(f"close {alias}", None, 0, None)
+        try:
+            mci(f"stop {alias}", None, 0, None)
+            mci(f"close {alias}", None, 0, None)
+        finally:
+            if started:
+                _finish_playback()
 
 
-def _speak_edge(text):
+def _speak_edge(text, cancelled):
     """edge-tts 合成到临时 mp3 再播放。失败会抛异常，由 speak 回退 SAPI。"""
     import edge_tts
 
@@ -72,9 +161,11 @@ def _speak_edge(text):
     os.close(fd)
     try:
         asyncio.run(edge_tts.Communicate(text, _VOICE).save(path))
+        if cancelled.is_set():
+            return
         if os.path.getsize(path) == 0:
             raise RuntimeError("edge-tts 返回空音频")
-        _play_mp3(path)
+        _play_mp3(path, cancelled)
     finally:
         try:
             os.remove(path)
@@ -139,22 +230,36 @@ def prefetch_cue(text, tempo=_CUE_TEMPO):
     text = (text or "").strip()
     if not text:
         return
+    cancelled = _request_token()
+    if cancelled is None:
+        return
     with _lock:
+        _refresh_config()
+        if cancelled.is_set():
+            return
         _ensure_cue(text, tempo)
 
 
 def play_cue(text, tempo=_CUE_TEMPO):
-    """播放一个固定的短提示语（如"嗯"/"好的"）。首次合成后缓存到本地，之后直接放缓存，
+    """播放一个固定的短提示语（如唤醒或命令应答）。首次合成后缓存到本地，之后直接放缓存，
     避免每说一句都走一次网络合成而拖慢即时反馈。合成失败回退 SAPI。"""
     text = (text or "").strip()
     if not text:
         return
+    cancelled = _request_token()
+    if cancelled is None:
+        return
     with _lock:
-        path = _ensure_cue(text, tempo)
-        if path is None:
-            _speak_sapi(text)
+        _refresh_config()
+        if cancelled.is_set():
             return
-        _play_mp3(path)
+        path = _ensure_cue(text, tempo)
+        if cancelled.is_set():
+            return
+        if path is None:
+            _speak_sapi(text, cancelled)
+            return
+        _play_mp3(path, cancelled)
 
 
 def speak(text):
@@ -162,12 +267,20 @@ def speak(text):
     text = (text or "").strip()
     if not text:
         return
+    cancelled = _request_token()
+    if cancelled is None:
+        return
     with _lock:
+        _refresh_config()
+        if cancelled.is_set():
+            return
         try:
-            _speak_edge(text)
+            _speak_edge(text, cancelled)
         except Exception as e:
+            if cancelled.is_set():
+                return
             print(f"[tts] edge-tts 失败，回退 SAPI：{e}")
-            _speak_sapi(text)
+            _speak_sapi(text, cancelled)
 
 
 if __name__ == "__main__":

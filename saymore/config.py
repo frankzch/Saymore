@@ -13,6 +13,7 @@ from saymore.paths import CONFIG_PATH, _resolve
 
 DEFAULT_CONFIG = {
     "autostart": False,       # 登录 Windows 时是否自动后台启动 Saymore（走任务计划程序，见 saymore/win/autostart.py）
+    "tts_enabled": True,      # 语音播报总开关；改动实时生效，关闭时停止当前及排队播报
     "wake_words": ["小咪"],   # 唤醒词（可多个）；说中其一即进入聆听状态。建议 3-4 字且不常用
     "sleep_after_seconds": 300,  # 唤醒后静默超过此秒数（默认 5 分钟）进入完整休眠：回到待唤醒并卸载模型释放内存/显存。最后 60s 悬浮窗显示倒计时
     "kws_model_dir": "kws-model",       # sherpa-onnx KWS 模型目录（解压 release 得到，含 *.onnx + tokens.txt）
@@ -42,7 +43,6 @@ DEFAULT_CONFIG = {
     "polish_quiet_seconds": 10.0,   # 兼容旧配置，已停用自动整理计时
     "polish_min_confidence": 0.6,   # 整理置信度低于此值：面板里该段标红提示用户复核，不丢弃/不阻断回填
     "panel_low_conf_rgb": ui_style.PANEL_LOW_CONF_RGB,  # 整理置信度偏低：红色
-    "hear_cue_min_gap": 3.0,     # 每识别一句回一声"嗯/好"的最小间隔(秒)
     "save_audio": True,          # True=留存语音 wav+转写结果给端到端微调攒同分布数据
     "panel": True,               # True=识别句先进右下角半透明玻璃面板缓冲，可语音纠正后再整理回填输入框
     # 磨砂面板外观：默认值统一取自 ui_style 主题，配置可覆盖

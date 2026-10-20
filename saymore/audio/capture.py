@@ -6,6 +6,7 @@ build_vad 造 Silero VAD、build_keyword_spotter 造 sherpa-onnx KWS 唤醒器�
 """
 import re
 import sys
+import time
 
 import numpy as np
 import sounddevice as sd
@@ -22,12 +23,17 @@ class Recorder:
     """
 
     def __init__(self, sample_rate, on_segment, silence_rms, silence_seconds, min_segment_seconds,
-                 max_segment_seconds=15.0, on_block=None, on_speech=None, vad=None, device=None):
+                 max_segment_seconds=15.0, on_block=None, on_speech=None, vad=None, device=None,
+                 input_guard=None, on_input_suppressed=None):
         self.sample_rate = sample_rate
         self.device = device  # None=系统默认；否则按名字匹配（不匹配则退默认）
         self.on_segment = on_segment
         self.on_block = on_block   # 每个原始音频块都回调一次（待唤醒时喂给 KWS）
         self.on_speech = on_speech # 检测到说话声时回调（用于刷新休眠倒计时，避免长句中途休眠）
+        self.input_guard = input_guard
+        self.on_input_suppressed = on_input_suppressed
+        self._input_generation = None
+        self._input_suppressed = False
         self.silence_rms = silence_rms
         self.silence_samples = int(silence_seconds * sample_rate)
         self.min_samples = int(min_segment_seconds * sample_rate)
@@ -49,12 +55,35 @@ class Recorder:
         if self.vad is not None:
             self.vad.reset()
 
+    def _suppress_input(self, time_info=None):
+        if self.input_guard is None:
+            return False
+        generation, resume_at = self.input_guard()
+        captured_at = time.monotonic()
+        if time_info is not None:
+            # PortAudio 时钟与 monotonic 起点不同，用块的采集延迟换算，挡住延迟交付的尾音。
+            latency = time_info.currentTime - time_info.inputBufferAdcTime
+            if time_info.inputBufferAdcTime > 0 and latency > 0:
+                captured_at -= latency
+        suppressed = captured_at < resume_at
+        generation_changed = (self._input_generation is not None
+                              and generation != self._input_generation)
+        if generation_changed or suppressed != self._input_suppressed:
+            self._reset_buf()  # 仅录音线程操作 VAD，进出屏蔽时都清掉未完成的切句。
+            if self.on_input_suppressed is not None:
+                self.on_input_suppressed(suppressed)
+        self._input_generation = generation
+        self._input_suppressed = suppressed
+        return suppressed
+
     def _callback(self, indata, frames, time_info, status):
         if status:
             print(f"[audio] {status}", file=sys.stderr)
         block = indata[:, 0].copy()
         if block.size == 0:
             return
+        if self._suppress_input(time_info):
+            return  # 自身播报不进入音量回调、唤醒检测、VAD 或识别队列。
         if self._discard_pending:
             # 别的线程请求丢弃缓冲（唤醒瞬间），在本线程里执行，见 discard_current
             self._reset_buf()
@@ -149,6 +178,9 @@ class Recorder:
             self._stream.stop()   # 等回调跑完，之后缓冲不再变化
             self._stream.close()
             self._stream = None
+        if self._suppress_input() or self._discard_pending:
+            self._reset_buf()
+            return
         if self.vad is not None:
             self.vad.flush()
             while not self.vad.empty():

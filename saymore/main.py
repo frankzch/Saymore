@@ -35,7 +35,6 @@ _boot_marker("main.py module loaded")
 import json
 import os
 import queue
-import random
 import re
 import signal
 import sys
@@ -107,8 +106,6 @@ _COLD_WAKE_CUE = "正在启动中，加载模型大概需要几秒钟的时间�
 _COLD_CUE_TEMPO = 1.0
 # 听写模式下识别到命令词（发送/输入/回退等）的简短应答（轮换）
 _CMD_ACK_CUES = ["好的", "收到"]
-# 每识别出一句普通听写句的即时应答（随机选一个，短，别等整理好——整理太慢）
-_HEAR_CUES = ["嗯", "好"]
 
 
 _BACKEND_LOCK = None  # 单例互斥量句柄,进程生命周期内必须挂着不释放
@@ -272,13 +269,20 @@ def main():
             if len(lv) > 40:
                 del lv[:-40]
             if kws_queue_dl is not None and state["mode"] == "sleep":
-                kws_queue_dl.put(block)
+                kws_queue_dl.put((tts.capture_state()[0], block))
 
         def kws_worker_dl():
+            generation = tts.capture_state()[0]
             while not state["quit"]:
                 try:
-                    block = kws_queue_dl.get(timeout=0.5)
+                    recorded_generation, block = kws_queue_dl.get(timeout=0.5)
                 except queue.Empty:
+                    continue
+                current_generation = tts.capture_state()[0]
+                if current_generation != generation:
+                    spotter_dl.reset_stream(kws_stream_dl)
+                    generation = current_generation
+                if recorded_generation != generation or tts.input_suppressed():
                     continue
                 if state["mode"] != "sleep":
                     continue
@@ -318,6 +322,7 @@ def main():
                 on_block=on_block_dl,
                 vad=build_vad(cfg),
                 device=cfg.get("input_device") or None,
+                input_guard=tts.capture_state,
             )
             threading.Thread(target=kws_worker_dl, daemon=True).start()
             recorder_dl.start()  # 进程退出走消息循环终止 → daemon 线程随退，无需手动 stop
@@ -837,12 +842,6 @@ def main():
             ack_cue()
             return
         buffer.add(text)  # 只攒识别原文；发送或主动说“整理”才整理
-        # 即时回应一声"嗯/好"，让用户知道这句已听到——不等后台整理（那要好几秒）。
-        # 但距上一声不够 hear_cue_min_gap 秒就跳过，免得说话密时反馈过密。
-        now = time.time()
-        if now - state.get("last_hear_cue", 0.0) >= cfg.get("hear_cue_min_gap", 3.0):
-            state["last_hear_cue"] = now
-            threading.Thread(target=tts.play_cue, args=(random.choice(_HEAR_CUES),), daemon=True).start()
         seg = state.pop("_seg_audio", None)  # 这句的音频跟着进待落盘缓存；命令词不走到这，不会被留存
         if seg:
             state.setdefault("pending_audio", []).append(seg)
@@ -1002,14 +1001,21 @@ def main():
             del lv[:-40]
         # KWS 解码搬到独立线程，回调里只入队：否则解码占着回调线程会 input overflow 丢唤醒音频
         if kws_queue is not None and state["mode"] == "sleep":
-            kws_queue.put(block)
+            kws_queue.put((tts.capture_state()[0], block))
 
     def kws_worker():
         """待唤醒时持续从队列取音频喂 KWS，命中关键词则切到聆听态。独立线程，不阻塞录音回调。"""
+        generation = tts.capture_state()[0]
         while not state["quit"]:
             try:
-                block = kws_queue.get(timeout=0.5)
+                recorded_generation, block = kws_queue.get(timeout=0.5)
             except queue.Empty:
+                continue
+            current_generation = tts.capture_state()[0]
+            if current_generation != generation:
+                spotter.reset_stream(kws_stream)
+                generation = current_generation
+            if recorded_generation != generation or tts.input_suppressed():
                 continue
             if state["mode"] != "sleep":
                 continue  # 已唤醒，丢弃入队后才切态的残留块
@@ -1069,6 +1075,14 @@ def main():
         if state["mode"] == "awake":
             state["last_activity"] = time.time()
 
+    def on_input_suppressed(suppressed):
+        state["input_suppressed"] = suppressed
+        state["speaking"] = False
+        state["levels"].clear()
+        screen_ctx.release_anchor()
+        if state.get("panel") is not None:
+            state["panel"].notify_speech_end()
+
     recorder = Recorder(
         cfg["sample_rate"],
         on_segment=on_segment_cut,
@@ -1080,6 +1094,8 @@ def main():
         on_speech=on_speech_start,
         vad=build_vad(cfg),
         device=cfg.get("input_device") or None,
+        input_guard=tts.capture_state,
+        on_input_suppressed=on_input_suppressed,
     )
     def do_import(path):
         """对给定文件跑导入：唤醒进提醒模式 + 抽字建提醒（在后台线程里跑，别卡监视线程）。

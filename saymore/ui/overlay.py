@@ -388,6 +388,8 @@ def run_overlay(state):
         dots = "…"  # 固定提示宽度，避免无正文时胶囊跟随省略号反复伸缩
         if state.get("panel_sending"):
             hint = "正在发送…" if state.get("send_phase") == "sending" else "正在整理…"
+        elif state.get("input_suppressed"):
+            hint = "正在播报，请稍候…"
         elif state["mode"] == "awake":
             if state.get("warming"):
                 elapsed = now - state.get("warming_start", now)
