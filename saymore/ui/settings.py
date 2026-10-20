@@ -21,6 +21,8 @@ CATEGORIES = [
     ("通用设置", "", [
         ("autostart", "开机自启", "登录 Windows 时自动在后台启动 Saymore",
          "bool", None),
+        ("tts_enabled", "语音播报", "关闭后停止所有语音提示和提醒播报，立即生效，无需重启",
+         "bool", None),
         ("input_device", "麦克风", "系统里所有输入设备都在下拉里，选完对着绿条说两句能跳就是选对了；改动重启生效", "mic", None),
         ("device", "计算设备", "语音识别 + 文本整理都用这个跑（同一个本地模型进程）", "select",
          [("cuda", "GPU", "显卡加速，速度快,推荐"),
@@ -193,7 +195,11 @@ def save(config_path, payload):
         if typ == "wordlist":
             _write_wordlist(_wordlist_path(key, cfg, cfg_path.parent), _parse(raw, typ))
         else:
-            cfg[key] = _parse(raw, typ)
+            value = _parse(raw, typ)
+            if key == "tts_enabled" and not value:
+                # 保留关闭记录，后台即使错过快速关开，也会丢弃旧播报。
+                cfg["tts_cancel_generation"] = int(cfg.get("tts_cancel_generation", 0)) + 1
+            cfg[key] = value
             cfg_dirty = True
     if cfg_dirty:
         cfg_path.write_text(json.dumps(cfg, ensure_ascii=False, indent=2), encoding="utf-8")

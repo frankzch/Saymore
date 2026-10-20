@@ -636,7 +636,7 @@ const ps = document.getElementById('p-settings');
 /* 命令词：每词一个小方块（右上角叉删除）+ 末尾「+」方块（点它就地展开输入框，回车加词） */
 const chipState = {};  // key -> {label, words}，关窗前查一遍别让哪类指令词被删光
 const originalValues = {};  // key -> 打开设置窗口时的原值，用于判断改回原值后是否还需要重启
-const noRestartKeys = new Set(['autostart']);  // wordlist 等实时生效的键，跳过重启提示（必须先声明，buildWordlist 用得到）
+const noRestartKeys = new Set(['autostart', 'tts_enabled']);  // wordlist 等实时生效的键，跳过重启提示（必须先声明，buildWordlist 用得到）
 function buildChips(row, f) {
   const single = !!(f.options && f.options.single);  // 唤醒词等：只保留一个方块，加新词即替换
   const words = (f.value || []).slice();
