@@ -241,7 +241,7 @@ def prefetch_cue(text, tempo=_CUE_TEMPO):
 
 
 def play_cue(text, tempo=_CUE_TEMPO):
-    """播放一个固定的短提示语（如唤醒或命令应答）。首次合成后缓存到本地，之后直接放缓存，
+    """播放一个固定的短提示语（如唤醒提示）。首次合成后缓存到本地，之后直接放缓存，
     避免每说一句都走一次网络合成而拖慢即时反馈。合成失败回退 SAPI。"""
     text = (text or "").strip()
     if not text:

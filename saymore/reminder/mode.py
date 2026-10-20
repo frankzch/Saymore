@@ -5,6 +5,7 @@ voice_input 只需：实例化 ReminderMode，在「命中第二唤醒词」「�
 """
 import threading
 import time
+import re
 from collections import deque
 from pathlib import Path
 
@@ -23,6 +24,15 @@ _DEFAULT_NAG_TEMPLATES = [
 _DEFAULT_ACK_WORDS = ["知道了", "听到了", "我知道", "收到", "好的", "好啦", "行了", "行行行", "好好好",
                       "嗯", "知道", "别响了", "别念了", "停一下", "停", "够了", "我来了", "我起了",
                       "起来了", "闭嘴", "别催了", "不用了"]
+
+_EMPTY_REPLY_WORDS = {"嗯", "嗯哼", "好", "好的", "好啦", "收到", "收到了", "已收到",
+                      "知道了", "明白", "明白了", "行"}
+
+
+def _has_reply_content(text):
+    """仅跳过模型的纯应答，保留提醒内容；不影响用户口述文字。"""
+    words = [word for word in re.split(r"[\s，。！？、；：,.!?;:~～…]+", text or "") if word]
+    return any(word not in _EMPTY_REPLY_WORDS for word in words)
 
 # 文件导入分块：4096 上下文 - system prompt(~1000 token 量级，随现有提醒数浮动) - 1024 输出，
 # 留够余量。滑动窗口重叠切块，不依赖文档排版（不管按行/按段落/按表格单元格怎么摆日程）：
@@ -84,10 +94,10 @@ class ReminderMode:
         return cmd in self.to_dictation_words
 
     def handle_turn(self, text):
-        """提醒模式下处理一句话：交给本地 reminder 人格出 JSON、执行动作并 SAPI 播报回复。
-        （"好的，收到。"已在 voice_input 确认整轮说完、即将调模型时(flush)播，这里不再重复。）"""
+        """处理提醒并播报有实际内容的结果，不播放纯应答。"""
         say, _actions = self._run_turn(text)
-        tts.speak(say)
+        if _has_reply_content(say):
+            tts.speak(say)
 
     def _run_turn(self, text):
         """交给本地 reminder 人格解析一轮文本、执行动作，返回 (要朗读的话, 已执行 actions)，
@@ -173,15 +183,13 @@ class ReminderMode:
         self.stop_nag(silent=True)  # 达上限（用户多半不在）也要清理回休眠
 
     def stop_nag(self, silent=False):
-        """停止催办：用户应答(silent=False，回一声确认) 或 达上限(silent=True)。幂等。"""
+        """停止催办，不追加确认播报。保留 silent 参数兼容现有调用。幂等。"""
         with self._nag_lock:
             session = self._nag
             if session is None:
                 return
             self._nag = None
         session["stop"].set()
-        if not silent:
-            threading.Thread(target=tts.speak, args=("好的，知道了。",), daemon=True).start()
         if self.on_nag_stop:
             self.on_nag_stop()
 

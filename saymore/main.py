@@ -65,10 +65,6 @@ from saymore.ui.overlay import run_overlay
 from saymore.audio.capture import Recorder, build_vad, build_keyword_spotter
 
 
-# 提醒模式下每收一句的简短人声应答（轮换，听着自然），替代听写模式的猫叫
-_REMINDER_CUES = ["嗯", "好的", "嗯哼", "好"]
-
-
 def _close_main_window():
     """重启前把主窗口子进程一并关掉——它是 subprocess.Popen 出来的独立进程，
     不会跟着本进程退。找 "Saymore" 顶层窗口 → 定位 PID → TerminateProcess。
@@ -104,8 +100,6 @@ _COLD_WAKE_CUE = "正在启动中，加载模型大概需要几秒钟的时间�
 # 这句用原速 = 7.8s，在圆环那个 10s 倒计时归零前说完还留两秒余量。
 # 再放慢能贴满倒计时，但听着拖沓，不值当（短应答另用默认 1.4 倍速，要的是干脆）。
 _COLD_CUE_TEMPO = 1.0
-# 听写模式下识别到命令词（发送/输入/回退等）的简短应答（轮换）
-_CMD_ACK_CUES = ["好的", "收到"]
 
 
 _BACKEND_LOCK = None  # 单例互斥量句柄,进程生命周期内必须挂着不释放
@@ -619,7 +613,6 @@ def main():
     def enter_sleep(reason):
         """进入完整休眠：回到待唤醒并卸载模型释放内存/显存。
         面板里攒的缓存直接丢弃——用户没说"发送/输入"处理它，进休眠就当不要了，面板随之消失。"""
-        was_reminder = state["mode"] in ("reminder", "nag")
         state["mode"] = "sleep"
         state["status"] = "idle"
         state["speaking"] = False  # 清残留，免得下次唤醒面板误显"正在说话"
@@ -633,8 +626,6 @@ def main():
         reminder.clear()  # 退出提醒模式即清空对话历史
         state["rbuf"] = []  # 丢弃没攒完的散句，免得泄进下次对话
         print(reason)
-        if was_reminder:
-            threading.Thread(target=tts.speak, args=("好的，退出提醒。",), daemon=True).start()
         def _learn_then_unload():
             # 热词学习只在休眠做：趁模型还没卸，把积压的发送历史切完再放显存；中途被唤醒就停且不卸
             asleep = lambda: state["mode"] == "sleep" and not state["quit"]
@@ -665,12 +656,6 @@ def main():
         import saymore.audio.log as audio_log
         for a, sr, t, c in pa:
             audio_log.save(a, sr, t, c)
-
-    def ack_cue():
-        """命令词识别后的简短语音应答（轮换，别每次都一样），让用户知道命令被听到了。"""
-        i = state.get("cmd_cue_i", 0)
-        state["cmd_cue_i"] = i + 1
-        threading.Thread(target=tts.play_cue, args=(_CMD_ACK_CUES[i % len(_CMD_ACK_CUES)],), daemon=True).start()
 
     def _send_buffer_impl():
         """语音命令与标题栏按钮共用发送流程，统一检查焦点、整理和记录。"""
@@ -705,7 +690,6 @@ def main():
         if send_text:
             hotwords.record(send_text)
         print(f"[done] 发送（{'回车' if auto_enter else '不回车'}）")
-        ack_cue()
         return True
 
     def send_buffer():
@@ -725,17 +709,14 @@ def main():
         if cmd in confirm_words:
             state["nod_until"] = time.time() + 0.9
             click_permission_button(focus_title)  # 优先"总是允许"，否则"允许一次"
-            ack_cue()
             return True
         if cmd in polish_words:
             state["nod_until"] = time.time() + 0.9  # 执行命令：猫点头致意
             if state.get("panel") is not None:
                 state["panel"].trigger_polish_now()
                 print("[done] 语音命令：立即触发整理")
-            ack_cue()
             return True
         if cmd in sleep_words:
-            ack_cue()
             enter_sleep("💤 语音命令：进入完整休眠并卸载模型，等待唤醒。")
             return True
         if cmd in quit_words:
@@ -811,7 +792,6 @@ def main():
                     pa.pop()  # 音频缓存跟着弹一条，与面板缓冲对齐
                 state["_uncommit_audio_n"] = max(0, state.get("_uncommit_audio_n", 0) - 1)
                 print("[done] 回退：已删除面板里未回填的最后一句")
-                ack_cue()
                 return
             hist = state.setdefault("history", [])
             if hist:
@@ -826,7 +806,6 @@ def main():
                 for _ in range(len(last)):
                     keyboard.send("backspace")  # ponytail: 1 字符=1 退格，富文本/输入法候选态可能不准
                 print(f"[done] 回退，已删除上一句 {len(last)} 字（剩 {len(hist)} 句可回退）")
-                ack_cue()
             else:
                 print("[info] 无可回退的内容")
             return
@@ -839,7 +818,6 @@ def main():
                 n_list[:] = [0] * len(n_list)  # 对应计数作废，防止之后回退误删新音频
             state["_uncommit_audio_n"] = 0
             print("[done] 清空：面板缓存已重置")
-            ack_cue()
             return
         buffer.add(text)  # 只攒识别原文；发送或主动说“整理”才整理
         seg = state.pop("_seg_audio", None)  # 这句的音频跟着进待落盘缓存；命令词不走到这，不会被留存
@@ -856,7 +834,6 @@ def main():
             state["status"] = "awake"
             state["last_activity"] = time.time()
             print("✓ 语音命令：切回听写模式。")
-            threading.Thread(target=tts.speak, args=("好的，切回听写。",), daemon=True).start()
             return
         if cmd in send_words:  # 提醒模式："发送"=立刻把已攒的话送 LLM，不等停顿超时
             flush_reminder_buffer()
@@ -868,18 +845,9 @@ def main():
             confirm_quit()
             return
         if state.get("llm_busy"):
-            # 上一条还在调大模型：直接丢弃这句不入缓冲，只提醒用户稍候（4s 内只播一次，免得连说几句狂播）
-            now = time.time()
-            if now - state.get("busy_ack_time", 0) > 4:
-                state["busy_ack_time"] = now
-                threading.Thread(target=tts.speak, args=("正在处理上一条，请稍等。",), daemon=True).start()
+            # 上一条仍在处理，界面继续显示处理中，不再追加语音应答。
             return
         state.setdefault("rbuf", []).append(text)
-        # 提醒模式只用人声（不用猫叫）：收到一句先攒着，回个简短的"嗯/好的"应一声
-        i = state.get("cue_i", 0)
-        state["cue_i"] = i + 1
-        cue = _REMINDER_CUES[i % len(_REMINDER_CUES)]
-        threading.Thread(target=tts.play_cue, args=(cue,), daemon=True).start()
 
     def flush_reminder_buffer():
         """停顿够久，把攒的散句拼成一整句送 LLM；先清空缓冲再调，免得播报那几秒新来的段被旧 turn 带走。"""
@@ -887,9 +855,6 @@ def main():
         if not buf:
             return
         state["rbuf"] = []
-        # 确认这一整轮说完、即将调大模型，才播一次即时反馈（一轮一次，不每句播）。
-        # 这句故意说长一点，用播报时间盖住后面调模型的停顿。
-        threading.Thread(target=tts.speak, args=("好的，收到了，正在处理中，请稍等一下。",), daemon=True).start()
         reminder.handle_turn("".join(buf))
         state["last_activity"] = time.time()  # 静默超时从「答完」起算，不被慢 LLM/长播报吃掉
 
@@ -898,7 +863,7 @@ def main():
         这样麦克风录进的催办播报声、环境噪音都不会被打字或送 LLM。"""
         cmd = text.strip().strip(SENTENCE_END + " ")
         if reminder.is_ack(cmd) or cmd in sleep_words:
-            reminder.stop_nag()  # 回一声确认，并触发 on_nag_stop → 若是催办唤醒的则回休眠
+            reminder.stop_nag()  # 触发 on_nag_stop；若是催办唤醒的则回休眠，不追加应答
 
     panel_send = object()
 

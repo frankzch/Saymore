@@ -91,7 +91,7 @@ def handle(store, history, user_text, llm_cfg, chat_fn):
                 applied.append(action)
         except (KeyError, ValueError) as e:
             print(f"[warn] 执行动作失败 {action}: {e}")
-    say = data.get("say", "好的。")
+    say = data.get("say", "")
     history.append({"role": "assistant", "content": say})
     return say, applied
 
